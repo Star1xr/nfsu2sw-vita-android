@@ -1,8 +1,9 @@
 # Android port
 
-**Status: work in progress.** Everything below is written, but none of it has been compiled
-with the NDK or run on a device yet. Expect build errors and crashes on the first runs. See
-[Known risks](#known-risks). **PS Vita is only a plan** and has no code.
+**Status: beta.** The port builds with the NDK and runs on a phone: the ISO installer, rendering
+and the on-screen controls work on the one device it was tried on. Frame rate has not been
+measured and other devices are untested. See [Known risks](#known-risks). **PS Vita is only a
+plan** and has no code.
 
 ## How it works
 
@@ -137,10 +138,14 @@ driver has run any of it.
 
 ## Known risks
 
-None of these has been checked on a device.
+Resolved by testing on a device:
 
-- **Clang on the lifted code.** The generated C has only been built with GCC (Linux, devkitA64).
-  The first NDK build will show whether clang accepts all of it.
+- **Clang on the lifted code.** It builds with the NDK's clang.
+- **Guest address space.** The windows above 0x80000000 could not be mapped at first. The runtime
+  now reserves the whole 4 GB guest space up front (`w32_reserve_guest_space`).
+
+Still open, and not checked on a device:
+
 - **Thread-local registers.** The guest registers are `__thread`. In a shared library that costs
   a call per function, slower than on the Switch's static executable. Try
   `NFSU2_ANDROID_TLS_MODEL=initial-exec`; `PERF_NOTES.md` covers the register-in-locals work that
@@ -152,9 +157,6 @@ None of these has been checked on a device.
 - **Context loss.** When the app is backgrounded SDL may take the EGL context away. The present
   path makes it current again, but a driver that really destroys it would need every GL object
   rebuilt, which is not implemented.
-- **Guest address space.** As on macOS arm64, the guest cannot sit at its own addresses, so the
-  runtime's `g_xbox_mem_offset` path is used plus a 2 GB reservation for the extended VMA. A
-  device with a strict `RLIMIT_AS` would fail at boot ("failed to map base view").
 - **16 KB-page devices.** The guest's 4 KB page bookkeeping (`guest_vmem.c`) has never run on a
   16 KB host.
 - **Backgrounding.** SDL blocks its event pump while the app is paused, which pauses the game

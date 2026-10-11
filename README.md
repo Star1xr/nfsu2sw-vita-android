@@ -2,7 +2,7 @@
 
 <img src="https://cdn2.steamgriddb.com/logo/4b29fa4efe4fb7bc667c7b301b74d52d.png" alt="Need for Speed: Underground 2" width="520">
 
-### Xbox static recompilation for Nintendo Switch and Linux, Android in progress
+### Xbox static recompilation for Nintendo Switch and Linux, Android in beta
 
 The original Xbox (NTSC-U) release of **Need for Speed: Underground 2**, translated
 instruction by instruction to C and built as a native program. There is no emulator:
@@ -10,7 +10,7 @@ the game's own x86 code runs as compiled C on top of a small runtime that stands
 the Xbox kernel, the NV2A GPU and the APU audio hardware.
 
 ![Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012?logo=nintendoswitch&logoColor=white)
-![Android](https://img.shields.io/badge/Android-arm64%20%28WIP%29-3DDC84?logo=android&logoColor=white)
+![Android](https://img.shields.io/badge/Android-arm64%20%28beta%29-3DDC84?logo=android&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
 ![PS Vita](https://img.shields.io/badge/PS%20Vita-planned-lightgrey?logo=playstation&logoColor=white)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)
@@ -34,7 +34,7 @@ the Xbox kernel, the NV2A GPU and the APU audio hardware.
 |---|---|---|
 | Linux x86_64 | Working: boot, movies, profile, Main Menu, Quick Race and Career, with audio | this branch |
 | Nintendo Switch | Working on hardware: boot, movies, profile, Main Menu, races | this branch |
-| Android arm64 | **Work in progress.** Written but not yet built with the NDK or run on a device | [`android/`](android/README.md) |
+| Android arm64 | **Beta.** Builds with the NDK and runs on a phone: ISO install, rendering and touch controls work. Performance is not measured yet | [`android/`](android/README.md) |
 | PS Vita | **Plan only.** No code, nothing evaluated beyond a first look | none |
 
 ## Features
@@ -106,11 +106,11 @@ VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
 </details>
 
 <details>
-<summary><b>2c. Android</b> (work in progress: NDK, SDL2, OpenGL ES 3 or Vulkan)</summary>
+<summary><b>2c. Android</b> (beta: NDK, SDL2, OpenGL ES 3 or Vulkan)</summary>
 
-> **Work in progress.** This is a first draft that has not been compiled with the NDK or
-> run on a device yet. Expect build errors and crashes. **PS Vita is only a plan**: there is
-> no Vita code in this repository.
+> **Beta.** The port builds and runs on a phone (checked on one device). Frame rate has not
+> been measured and other devices are untested. **PS Vita is only a plan**: there is no Vita
+> code in this repository.
 
 ```sh
 android/tools/fetch_deps.sh
