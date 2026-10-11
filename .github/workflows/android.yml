@@ -11,6 +11,9 @@ on:
     branches: [android-port]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
@@ -59,9 +62,10 @@ jobs:
 
       - name: Lift the C (tools/regen.sh)
         if: steps.xbe.outputs.have == 'true'
+        shell: bash
         run: |
           pip install capstone
-          tools/regen.sh 2>&1 | tail -n 200
+          tools/regen.sh 2>&1 | tee regen.log | tail -n 200
           du -sh "$NFSU2_GEN_DIR"; ls "$NFSU2_GEN_DIR" | wc -l
 
       - name: SDL2 sources
@@ -82,9 +86,11 @@ jobs:
       - name: Build APK
         if: steps.xbe.outputs.have == 'true'
         working-directory: android
+        shell: bash
         run: |
           FF=""
           [ -d "$GITHUB_WORKSPACE/ffmpeg-vp6-android" ] && FF="-Pnfsu2.ffmpegDir=$GITHUB_WORKSPACE/ffmpeg-vp6-android"
+          set -o pipefail
           ./gradlew --no-daemon --stacktrace assembleRelease \
             -Pnfsu2.genDir="$NFSU2_GEN_DIR" $FF 2>&1 | tee ../build.log | tail -n 300
         env:
@@ -106,3 +112,14 @@ jobs:
           name: build-log
           path: build.log
           retention-days: 7
+
+      - name: Publish log tails to branch ci-logs
+        if: always() && steps.xbe.outputs.have == 'true'
+        shell: bash
+        run: |
+          mkdir -p /tmp/logs
+          for f in regen.log build.log; do [ -f "$f" ] && tail -n 4000 "$f" > "/tmp/logs/$f"; done
+          echo "run ${{ github.run_id }}" > /tmp/logs/RUN.txt
+          cd /tmp/logs && git init -q -b ci-logs && git add . \
+            && git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -q -m "logs run ${{ github.run_id }}" \
+            && git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-logs
