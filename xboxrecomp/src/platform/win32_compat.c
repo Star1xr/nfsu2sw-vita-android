@@ -41,6 +41,9 @@
 #else
 #include <sys/mman.h>
 #endif
+#if defined(__ANDROID__)
+#include <sys/syscall.h>   /* memfd_create is a raw syscall below API 30 */
+#endif
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
 #include <sys/stat.h>
@@ -887,7 +890,12 @@ void xbox_guest_pin(int interrupt)
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET(core, &set);
+#if defined(__ANDROID__)
+        /* bionic has no pthread_setaffinity_np; pid 0 = this thread. */
+        sched_setaffinity(0, sizeof set, &set);
+#else
         pthread_setaffinity_np(pthread_self(), sizeof set, &set);
+#endif
         (void)interrupt;
     }
 #endif
@@ -1157,11 +1165,36 @@ DWORD SuspendThread(HANDLE h)
     return prev;
 }
 
+#if defined(__ANDROID__)
+static void android_exit_handler(int sig)
+{
+    (void)sig;
+    pthread_exit(NULL);
+}
+
+static void android_install_exit_signal(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = android_exit_handler;
+    sigaction(SIGUSR2, &sa, NULL);
+}
+#endif
+
 BOOL TerminateThread(HANDLE h, DWORD exitCode)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_THREAD) return FALSE;
+#if defined(__ANDROID__)
+    /* bionic has no pthread_cancel: ask the thread to exit with a signal. */
+    {
+        static pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_once(&once, android_install_exit_signal);
+        pthread_kill(o->thread, SIGUSR2);
+    }
+#else
     pthread_cancel(o->thread);
+#endif
     pthread_mutex_lock(&o->lock);
     o->exit_code = exitCode;
     o->exited    = 1;
@@ -2411,7 +2444,12 @@ static int anon_map_fd(const char *name)
     if (fd >= 0) shm_unlink(shm_name);
     return fd;
 #else
+#if defined(__ANDROID__)
+    /* <sys/mman.h> declares memfd_create from API 30 only. */
+    return (int)syscall(__NR_memfd_create, name ? name : "xbox_map", 0);
+#else
     return memfd_create(name ? name : "xbox_map", 0);
+#endif
 #endif
 }
 

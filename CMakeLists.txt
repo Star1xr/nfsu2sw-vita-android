@@ -3,8 +3,9 @@ cmake_minimum_required(VERSION 3.20)
 # ============================================================================
 # Need for Speed: Underground 2 (Xbox, NTSC-U) - Static Recompilation
 #
-# Hosts: Windows (MSVC, D3D11), Linux (GCC, SDL2 + OpenGL) and Nintendo
-# Switch homebrew (devkitA64 + libnx, built with switch/build.sh).
+# Hosts: Windows (MSVC, D3D11), Linux (GCC, SDL2 + OpenGL), Nintendo Switch
+# homebrew (devkitA64 + libnx, built with switch/build.sh) and Android
+# (NDK + SDL2 + Vulkan, built by Gradle from android/).
 # ============================================================================
 
 project(nfsu2_recomp C)
@@ -35,6 +36,21 @@ endif()
 option(NFSU2_VULKAN "Render with Vulkan instead of OpenGL" OFF)
 set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
+# ── Android: SDL2 is built in-tree, Vulkan is the only renderer ──
+if(ANDROID)
+    if(NOT NFSU2_VULKAN)
+        message(FATAL_ERROR "The Android build needs -DNFSU2_VULKAN=ON (no GL renderer there)")
+    endif()
+    set(NFSU2_SDL2_DIR "" CACHE PATH "SDL2 source tree (android/tools/fetch_deps.sh)")
+    if(NOT EXISTS "${NFSU2_SDL2_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "NFSU2_SDL2_DIR must point at an SDL2 source tree")
+    endif()
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    set(SDL_TEST OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${NFSU2_SDL2_DIR} ${CMAKE_BINARY_DIR}/SDL2)
+endif()
+
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 
 file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "${NFSU2_GEN_DIR}/*.c")
@@ -50,6 +66,10 @@ src/nic.c
 
 if(WIN32)
     add_executable(${PROJECT_NAME} WIN32 ${GAME_SOURCES} ${RECOMP_GEN_SOURCES})
+elseif(ANDROID)
+    # SDLActivity loads libmain.so and calls its SDL_main (src/main.c).
+    add_library(${PROJECT_NAME} SHARED ${GAME_SOURCES} src/android_host.c ${RECOMP_GEN_SOURCES})
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME main)
 else()
     add_executable(${PROJECT_NAME} ${GAME_SOURCES} ${RECOMP_GEN_SOURCES})
 endif()
@@ -90,6 +110,28 @@ if(WIN32)
         target_link_options(${PROJECT_NAME} PRIVATE /LARGEADDRESSAWARE)
         target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
     endif()
+elseif(ANDROID)
+    # Clang (NDK). Same reasoning as the other hosts: the lifted chunks are
+    # huge straight-line functions; -O2 as on the Switch (the ISA is the same),
+    # NFSU2_GEN_OPT=-O1 if clang runs out of memory on a chunk.
+    # aarch64 is the Switch's ISA, so the unaligned-atomic fallbacks apply.
+    set(NFSU2_GEN_OPT "-O2" CACHE STRING "Optimisation for the lifted code")
+    set(NFSU2_ANDROID_TLS_MODEL "" CACHE STRING
+        "-ftls-model for the lifted code (guest registers are thread-local); try initial-exec")
+    set(NFSU2_GEN_FLAGS "${NFSU2_GEN_OPT};-w;-fno-strict-aliasing;-fwrapv")
+    if(NFSU2_ANDROID_TLS_MODEL)
+        list(APPEND NFSU2_GEN_FLAGS "-ftls-model=${NFSU2_ANDROID_TLS_MODEL}")
+    endif()
+    option(NFSU2_LTO "ThinLTO of the lifted code" OFF)
+    if(NFSU2_LTO)
+        list(APPEND NFSU2_GEN_FLAGS "-flto=thin")
+        target_link_options(${PROJECT_NAME} PRIVATE "-flto=thin")
+    endif()
+    set_source_files_properties(${RECOMP_GEN_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "${NFSU2_GEN_FLAGS}")
+    # Devices with 16 KB pages (Android 15+) need 16 KB aligned segments.
+    target_link_options(${PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 log android dl m)
 else()
     # The generated chunks are huge straight-line functions; -O1 keeps GCC's
     # memory and time per chunk sane while still allocating registers. The

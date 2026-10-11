@@ -1875,6 +1875,14 @@ static int create_swapchain(void)
     ci.imageArrayLayers = 1;
     ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     ci.preTransform = caps.currentTransform;
+#if defined(__ANDROID__)
+    /* A phone's panel is portrait: with the app locked to landscape
+     * currentTransform is ROTATE_90/270 and the swapchain would have to be
+     * rendered sideways. Ask for identity and let the compositor rotate (it
+     * reports currentExtent in the window's own orientation). */
+    if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+        ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+#endif
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     ci.presentMode = mode;
     ci.clipped = VK_TRUE;
@@ -1893,6 +1901,37 @@ static int create_swapchain(void)
             s_sc_extent.width, s_sc_extent.height, s_sc_count, s_sc_format, mode);
     return 1;
 }
+
+#if !defined(__SWITCH__)
+/* The window's surface went away (Android destroys it when the app is
+ * backgrounded; SDL's event pump blocks until the app returns) or the
+ * swapchain died with it: rebuild both. Leaves s_swapchain null when the
+ * window is not there yet; the next flip tries again. */
+static void surface_recover(void)
+{
+    if (s_headless || !s_win)
+        return;
+    vkDeviceWaitIdle(s_dev);
+    if (s_swapchain) {
+        vkDestroySwapchainKHR(s_dev, s_swapchain, NULL);
+        s_swapchain = VK_NULL_HANDLE;
+    }
+    if (s_surface) {
+        vkDestroySurfaceKHR(s_inst, s_surface, NULL);
+        s_surface = VK_NULL_HANDLE;
+    }
+    if (!SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surface)) {
+        s_surface = VK_NULL_HANDLE;
+        return;
+    }
+    if (!create_swapchain()) {
+        vkDestroySurfaceKHR(s_inst, s_surface, NULL);
+        s_surface = VK_NULL_HANDLE;
+        return;
+    }
+    fprintf(stderr, "  [VK] surface recreated\n");
+}
+#endif
 
 static int ready(void)
 {
@@ -1942,7 +1981,11 @@ static int ready(void)
                 s_headless = 1;
             } else {
                 s_win = SDL_CreateWindow("NV2A (Vulkan)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                         1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+                                         1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
+#if defined(__ANDROID__)
+                                         | SDL_WINDOW_FULLSCREEN
+#endif
+                                         );
                 if (!s_win) {
                     s_headless = 1;
                 } else {
@@ -3252,12 +3295,20 @@ static void vk_flip(void)
     barrier_all();
 
     VT("flip %u: surface %08X drew %d, acquiring\n", s_frame, s ? s->va : 0, s_drew_any);
-    if (!s_headless) {
+#if !defined(__SWITCH__)
+    if (!s_headless && !s_swapchain)
+        surface_recover();
+#endif
+    if (!s_headless && s_swapchain) {
         VkResult rr = vkAcquireNextImageKHR(s_dev, s_swapchain, UINT64_MAX, s_f->acquired,
                                             VK_NULL_HANDLE, &idx);
         if (rr == VK_ERROR_OUT_OF_DATE_KHR) {
             vkDeviceWaitIdle(s_dev);
             create_swapchain();
+#if !defined(__SWITCH__)
+        } else if (rr == VK_ERROR_SURFACE_LOST_KHR) {
+            surface_recover();
+#endif
         } else if (rr == VK_SUCCESS || rr == VK_SUBOPTIMAL_KHR) {
             VkImage dst = s_sc_images[idx];
             VT("flip %u: acquired image %u\n", s_frame, idx);
@@ -3342,6 +3393,10 @@ static void vk_flip(void)
         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
             vkDeviceWaitIdle(s_dev);
             create_swapchain();
+#if !defined(__SWITCH__)
+        } else if (pr == VK_ERROR_SURFACE_LOST_KHR) {
+            surface_recover();
+#endif
         }
     }
     {

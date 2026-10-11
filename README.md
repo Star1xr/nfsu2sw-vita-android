@@ -2,12 +2,13 @@
 
 <img src="https://cdn2.steamgriddb.com/logo/4b29fa4efe4fb7bc667c7b301b74d52d.png" alt="Need for Speed: Underground 2" width="520">
 
-### Xbox static recompilation for Nintendo Switch and Linux
+### Xbox static recompilation for Nintendo Switch, Linux and Android
 
 The original Xbox (NTSC-U) release of **Need for Speed: Underground 2**, lifted
 instruction by instruction to C and running natively, with no emulator.
 
 ![Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012?logo=nintendoswitch&logoColor=white)
+![Android](https://img.shields.io/badge/Android-arm64%20%28untested%29-3DDC84?logo=android&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)
 ![OpenGL](https://img.shields.io/badge/OpenGL-renderer-5586A4?logo=opengl&logoColor=white)
@@ -94,6 +95,19 @@ VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
 
 </details>
 
+<details>
+<summary><b>2c. Android</b> (NDK, SDL2, Vulkan; first port, untested on a device)</summary>
+
+```sh
+android/tools/fetch_deps.sh && android/tools/build_glslang.sh
+cd android && ./gradlew assembleRelease -Pnfsu2.genDir=/path/to/gen
+```
+
+See [`android/README.md`](android/README.md) for the requirements, where the
+disc goes on the phone, the touch controls and the known risks.
+
+</details>
+
 ### Project layout
 
 | Path | What |
@@ -101,6 +115,7 @@ VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
 | `src/main.c` | boot and runtime defaults |
 | `src/recomp_manual.c` | hand-written overrides of lifted functions |
 | `src/switch_nx.c` | Switch log device, env file, exception handler, loading screen |
+| `src/android_host.c`, `android/` | Android storage paths, env file, logcat, touch pad; Gradle project, SDL activity, on-screen controls |
 | `config/seed_functions.json` | entry points the static pass cannot see |
 | `xboxrecomp/` | the toolkit (MIT), vendored with this port's changes: NV2A renderers (Vulkan, OpenGL), SDL audio, Switch platform layer, translator fixes |
 | `tools/regen.sh` | XBE → lifted C (`gen/`, never committed) |

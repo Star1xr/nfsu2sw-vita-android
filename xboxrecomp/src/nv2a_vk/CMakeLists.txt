@@ -26,6 +26,22 @@ if(NINTENDO_SWITCH)
     target_link_libraries(xbox_nv2a_vk PUBLIC
         "${NVK_SDK}/lib/libvulkan.a" expat z nx
         "${NVK_SDK}/lib/libvulkan.a" expat z nx stdc++ m)
+elseif(ANDROID)
+    # NDK's libvulkan.so (headers come with the sysroot) and SDL2 built in-tree
+    # by the top-level project. glslang/SPIRV-Tools are the Android build from
+    # android/tools/build_glslang.sh (-DCMAKE_PREFIX_PATH=<its prefix>).
+    find_package(Vulkan REQUIRED)
+    if(NOT TARGET SDL2::SDL2)
+        find_package(SDL2 REQUIRED)
+    endif()
+    target_link_libraries(xbox_nv2a_vk PUBLIC Vulkan::Vulkan SDL2::SDL2 log)
+    # Present when glslang was built with ENABLE_OPT=ON (the default there).
+    find_library(SPVT_OPT SPIRV-Tools-opt PATHS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+    find_library(SPVT SPIRV-Tools PATHS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+    if(SPVT_OPT AND SPVT)
+        target_link_libraries(xbox_nv2a_vk PUBLIC ${SPVT_OPT} ${SPVT})
+    endif()
+    # libc++ comes from -DANDROID_STL=c++_static (android/app/build.gradle).
 else()
     find_package(Vulkan REQUIRED)
     find_package(PkgConfig REQUIRED)
