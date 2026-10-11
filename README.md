@@ -10,7 +10,7 @@ the game's own x86 code runs as compiled C on top of a small runtime that stands
 the Xbox kernel, the NV2A GPU and the APU audio hardware.
 
 ![Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012?logo=nintendoswitch&logoColor=white)
-![Android](https://img.shields.io/badge/Android-WIP%20on%20android--port-3DDC84?logo=android&logoColor=white)
+![Android](https://img.shields.io/badge/Android-beta%20on%20android--port-3DDC84?logo=android&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)
 ![OpenGL](https://img.shields.io/badge/OpenGL-renderer-5586A4?logo=opengl&logoColor=white)
@@ -34,7 +34,7 @@ the Xbox kernel, the NV2A GPU and the APU audio hardware.
 |---|---|---|
 | Linux x86_64 | Working: boot, movies, profile, Main Menu, Quick Race and Career, with audio | this branch |
 | Nintendo Switch | Working on hardware: boot, movies, profile, Main Menu, races | this branch |
-| Android arm64 | **Work in progress.** Written but not yet built with the NDK or run on a device | [`android-port`](../../tree/android-port) branch |
+| Android arm64 | **Beta.** Builds with the NDK and runs on a phone: ISO install, rendering and touch controls work. Performance is not measured yet | [`android-port`](../../tree/android-port) branch |
 | PS Vita | **Plan only.** No code, nothing evaluated beyond a first look | none |
 
 ## Features
@@ -110,8 +110,8 @@ VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
 Android is developed on the [`android-port`](../../tree/android-port) branch, not here. That branch adds
 an NDK/Gradle project, an OpenGL ES 3 port of the OpenGL renderer, touch controls and an
 installer that unpacks the game ISO on the phone, then deletes the ISO. It is
-**work in progress**: it has not yet been compiled with the NDK or run on a device, so
-expect build errors and crashes. See its README for the details and known risks.
+**beta**: it builds with the NDK and runs on a phone (checked on one device). Frame rate has
+not been measured and other devices are untested. See its README for the details and known risks.
 
 **PS Vita is only a plan.** There is no Vita code. The hardware is a hard fit (ARMv7 at about
 444 MHz, 512 MB of RAM, GXM instead of OpenGL ES), so nothing is promised.
