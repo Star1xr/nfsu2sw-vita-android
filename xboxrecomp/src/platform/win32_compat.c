@@ -1789,7 +1789,6 @@ static int prot_from_page(DWORD protect)
  * alone -- UnmapViewOfFile takes no length and VirtualFree(MEM_RELEASE) is
  * documented to take size 0 -- so the length has to be recoverable here or
  * munmap cannot be called at all. */
-#if defined(__APPLE__)
 /* One address range the guest owns outright. The Xbox model puts RAM mirrors and
  * hardware windows at fixed offsets from the host base, all the way up to
  * guest 0xFFFFFFFF. Hoping those 4 GB are free after the fact fails on Android
@@ -1814,6 +1813,7 @@ static int in_guest_res(const void *addr, size_t len)
     return g_guest_res_hi && a >= g_guest_res_lo && a + len <= g_guest_res_hi;
 }
 
+#if defined(__APPLE__)
 /* Darwin has no MAP_FIXED_NOREPLACE, and the two mmap options are both wrong
  * for VirtualAlloc: MAP_FIXED silently unmaps whatever already occupies the
  * range, and a bare address hint can be relocated by the kernel for reasons
