@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NFS Underground 2 (recomp)</string>
+    <string name="put_iso">Oyunun ISO dosyasını bu klasöre kopyala:\n\n%1$s\n\nOtomatik çıkarılır ve sonra silinir. Ya da ISO dosyasını seç:</string>
+    <string name="pick_iso">ISO dosyası seç…</string>
+    <string name="waiting_copy">ISO kopyalanması bitsin diye bekleniyor…</string>
+    <string name="extracting">Oyun çıkarılıyor…</string>
+    <string name="extracting_pct">Oyun çıkarılıyor… %1$d%%</string>
+    <string name="retry">Tekrar dene</string>
+    <string name="low_space">Yeterli depolama alanı yok: yaklaşık %1$s daha gerekli.</string>
+    <string name="failed">Çıkarma başarısız: %1$s</string>
+    <string name="iso_not_deleted">Oyun hazır, ama ISO silinemedi. İstersen kendin silebilirsin.</string>
+</resources>

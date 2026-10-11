@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.20)
 #
 # Hosts: Windows (MSVC, D3D11), Linux (GCC, SDL2 + OpenGL), Nintendo Switch
 # homebrew (devkitA64 + libnx, built with switch/build.sh) and Android
-# (NDK + SDL2 + Vulkan, built by Gradle from android/).
+# (NDK + SDL2 + OpenGL ES 3 or Vulkan, built by Gradle from android/).
 # ============================================================================
 
 project(nfsu2_recomp C)
@@ -36,11 +36,9 @@ endif()
 option(NFSU2_VULKAN "Render with Vulkan instead of OpenGL" OFF)
 set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
-# ── Android: SDL2 is built in-tree, Vulkan is the only renderer ──
+# ── Android: SDL2 is built in-tree; OpenGL ES 3 by default, Vulkan with
+#    -DNFSU2_VULKAN=ON (see android/README.md) ──
 if(ANDROID)
-    if(NOT NFSU2_VULKAN)
-        message(FATAL_ERROR "The Android build needs -DNFSU2_VULKAN=ON (no GL renderer there)")
-    endif()
     set(NFSU2_SDL2_DIR "" CACHE PATH "SDL2 source tree (android/tools/fetch_deps.sh)")
     if(NOT EXISTS "${NFSU2_SDL2_DIR}/CMakeLists.txt")
         message(FATAL_ERROR "NFSU2_SDL2_DIR must point at an SDL2 source tree")

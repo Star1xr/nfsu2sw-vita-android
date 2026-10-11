@@ -96,15 +96,17 @@ VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
 </details>
 
 <details>
-<summary><b>2c. Android</b> (NDK, SDL2, Vulkan; first port, untested on a device)</summary>
+<summary><b>2c. Android</b> (NDK, SDL2, OpenGL ES 3 or Vulkan; first port, untested on a device)</summary>
 
 ```sh
-android/tools/fetch_deps.sh && android/tools/build_glslang.sh
+android/tools/fetch_deps.sh
 cd android && ./gradlew assembleRelease -Pnfsu2.genDir=/path/to/gen
 ```
 
-See [`android/README.md`](android/README.md) for the requirements, where the
-disc goes on the phone, the touch controls and the known risks.
+The app takes the game **ISO**: put it in
+`Android/data/com.nfsu2x.nfsu2/files/iso/` (or pick it in the app) and it is
+extracted automatically, then deleted. See [`android/README.md`](android/README.md)
+for the requirements, the touch controls and the known risks.
 
 </details>
 

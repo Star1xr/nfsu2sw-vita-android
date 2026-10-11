@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NFS Underground 2 (recomp)</string>
+    <string name="put_iso">Copy your game ISO into this folder:\n\n%1$s\n\nIt is extracted automatically and then deleted. Or choose the ISO file:</string>
+    <string name="pick_iso">Choose ISO file…</string>
+    <string name="waiting_copy">Waiting for the ISO copy to finish…</string>
+    <string name="extracting">Extracting the game…</string>
+    <string name="extracting_pct">Extracting the game… %1$d%%</string>
+    <string name="retry">Try again</string>
+    <string name="low_space">Not enough free storage: about %1$s more is needed.</string>
+    <string name="failed">Extraction failed: %1$s</string>
+    <string name="iso_not_deleted">The game is ready, but the ISO could not be deleted. You can delete it yourself.</string>
 </resources>
