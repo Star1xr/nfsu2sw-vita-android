@@ -1,0 +1,108 @@
+# Builds the Android APK from your own default.xbe.
+#
+# The disc data never lives on this branch. In a PRIVATE repo, put default.xbe
+# in the root of a branch called `private-assets`; this workflow reads it from
+# there, lifts the C (tools/regen.sh), builds the APK with the NDK and uploads it.
+# Without that branch (e.g. the public repo) the job does nothing.
+name: android
+
+on:
+  push:
+    branches: [android-port]
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      NFSU2_XBE: ${{ github.workspace }}/default.xbe
+      NFSU2_GEN_DIR: ${{ github.workspace }}/gen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Look for default.xbe (branch private-assets)
+        id: xbe
+        run: |
+          if git rev-parse --verify -q origin/private-assets >/dev/null \
+             && git cat-file -e origin/private-assets:default.xbe 2>/dev/null; then
+            git show origin/private-assets:default.xbe > default.xbe
+            test "$(head -c4 default.xbe)" = "XBEH"
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "No private-assets:default.xbe here, nothing to build."
+          fi
+
+      - name: Free disk space
+        if: steps.xbe.outputs.have == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/node_modules /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-python@v5
+        if: steps.xbe.outputs.have == 'true'
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@v4
+        if: steps.xbe.outputs.have == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Lift the C (tools/regen.sh)
+        if: steps.xbe.outputs.have == 'true'
+        run: |
+          pip install capstone
+          tools/regen.sh 2>&1 | tail -n 200
+          du -sh "$NFSU2_GEN_DIR"; ls "$NFSU2_GEN_DIR" | wc -l
+
+      - name: SDL2 sources
+        if: steps.xbe.outputs.have == 'true'
+        run: android/tools/fetch_deps.sh
+
+      - name: FFmpeg VP6 (movies; optional)
+        if: steps.xbe.outputs.have == 'true'
+        continue-on-error: true
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+          FFMPEG_SRC: ${{ github.workspace }}/ffmpeg-src
+          PREFIX: ${{ github.workspace }}/ffmpeg-vp6-android
+        run: |
+          git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg "$FFMPEG_SRC"
+          tools/build_ffmpeg_vp6.sh android
+
+      - name: Build APK
+        if: steps.xbe.outputs.have == 'true'
+        working-directory: android
+        run: |
+          FF=""
+          [ -d "$GITHUB_WORKSPACE/ffmpeg-vp6-android" ] && FF="-Pnfsu2.ffmpegDir=$GITHUB_WORKSPACE/ffmpeg-vp6-android"
+          ./gradlew --no-daemon --stacktrace assembleRelease \
+            -Pnfsu2.genDir="$NFSU2_GEN_DIR" $FF 2>&1 | tee ../build.log | tail -n 300
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+
+      - name: Upload APK
+        if: steps.xbe.outputs.have == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfsu2-android-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload build log
+        if: always() && steps.xbe.outputs.have == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
