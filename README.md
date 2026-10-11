@@ -8,8 +8,9 @@ The original Xbox (NTSC-U) release of **Need for Speed: Underground 2**, lifted
 instruction by instruction to C and running natively, with no emulator.
 
 ![Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012?logo=nintendoswitch&logoColor=white)
-![Android](https://img.shields.io/badge/Android-arm64%20%28untested%29-3DDC84?logo=android&logoColor=white)
+![Android](https://img.shields.io/badge/Android-arm64%20%28WIP%29-3DDC84?logo=android&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
+![PS Vita](https://img.shields.io/badge/PS%20Vita-planned-lightgrey?logo=playstation&logoColor=white)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)
 ![OpenGL](https://img.shields.io/badge/OpenGL-renderer-5586A4?logo=opengl&logoColor=white)
 ![Version](https://img.shields.io/badge/version-0.5-blue)
@@ -107,6 +108,13 @@ The app takes the game **ISO**: put it in
 `Android/data/com.nfsu2x.nfsu2/files/iso/` (or pick it in the app) and it is
 extracted automatically, then deleted. See [`android/README.md`](android/README.md)
 for the requirements, the touch controls and the known risks.
+
+> **Status: work in progress.** The Android port is a first draft: it has not been
+> compiled with the NDK or run on a device yet, so expect build errors and crashes.
+>
+> **PS Vita is only a plan.** There is no Vita code in this repository. The target
+> is a hard fit (ARMv7 at ~444 MHz, 512 MB RAM, GXM instead of OpenGL ES) and
+> nothing has been started or evaluated beyond that.
 
 </details>
 
