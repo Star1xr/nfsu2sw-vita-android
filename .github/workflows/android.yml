@@ -65,12 +65,12 @@ jobs:
         shell: bash
         run: |
           pip install capstone
-          tools/regen.sh 2>&1 | tee regen.log | tail -n 200
+          bash tools/regen.sh 2>&1 | tee regen.log | tail -n 200
           du -sh "$NFSU2_GEN_DIR"; ls "$NFSU2_GEN_DIR" | wc -l
 
       - name: SDL2 sources
         if: steps.xbe.outputs.have == 'true'
-        run: android/tools/fetch_deps.sh
+        run: bash android/tools/fetch_deps.sh
 
       - name: FFmpeg VP6 (movies; optional)
         if: steps.xbe.outputs.have == 'true'
@@ -81,7 +81,7 @@ jobs:
           PREFIX: ${{ github.workspace }}/ffmpeg-vp6-android
         run: |
           git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg "$FFMPEG_SRC"
-          tools/build_ffmpeg_vp6.sh android
+          bash tools/build_ffmpeg_vp6.sh android
 
       - name: Build APK
         if: steps.xbe.outputs.have == 'true'
@@ -91,7 +91,7 @@ jobs:
           FF=""
           [ -d "$GITHUB_WORKSPACE/ffmpeg-vp6-android" ] && FF="-Pnfsu2.ffmpegDir=$GITHUB_WORKSPACE/ffmpeg-vp6-android"
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace assembleRelease \
+          bash ./gradlew --no-daemon --stacktrace assembleRelease \
             -Pnfsu2.genDir="$NFSU2_GEN_DIR" $FF 2>&1 | tee ../build.log | tail -n 300
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
