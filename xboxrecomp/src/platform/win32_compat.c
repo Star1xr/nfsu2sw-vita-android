@@ -1790,6 +1790,30 @@ static int prot_from_page(DWORD protect)
  * documented to take size 0 -- so the length has to be recoverable here or
  * munmap cannot be called at all. */
 #if defined(__APPLE__)
+/* One address range the guest owns outright. The Xbox model puts RAM mirrors and
+ * hardware windows at fixed offsets from the host base, all the way up to
+ * guest 0xFFFFFFFF. Hoping those 4 GB are free after the fact fails on Android
+ * (the kernel places the base just under other mappings), so the whole range is
+ * reserved up front and fixed-address requests inside it replace our own
+ * placeholder instead of being refused. */
+static uintptr_t g_guest_res_lo, g_guest_res_hi;
+
+void *w32_reserve_guest_space(size_t size)
+{
+    void *p = mmap(NULL, size, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+    g_guest_res_lo = (uintptr_t)p;
+    g_guest_res_hi = (uintptr_t)p + size;
+    return p;
+}
+
+static int in_guest_res(const void *addr, size_t len)
+{
+    uintptr_t a = (uintptr_t)addr;
+    return g_guest_res_hi && a >= g_guest_res_lo && a + len <= g_guest_res_hi;
+}
+
 /* Darwin has no MAP_FIXED_NOREPLACE, and the two mmap options are both wrong
  * for VirtualAlloc: MAP_FIXED silently unmaps whatever already occupies the
  * range, and a bare address hint can be relocated by the kernel for reasons
@@ -1850,7 +1874,7 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
     }
 
 #if defined(MAP_FIXED_NOREPLACE)
-    if (address) flags |= MAP_FIXED_NOREPLACE;
+    if (address) flags |= in_guest_res(address, size) ? MAP_FIXED : MAP_FIXED_NOREPLACE;
 #endif
 
     void *p;
@@ -2504,7 +2528,7 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
      * and dying somewhere unrelated a moment later. */
     if (baseAddr) {
 #if defined(MAP_FIXED_NOREPLACE)
-        flags |= MAP_FIXED_NOREPLACE;
+        flags |= in_guest_res(baseAddr, len) ? MAP_FIXED : MAP_FIXED_NOREPLACE;
 #elif defined(__APPLE__)
         /* Darwin has no MAP_FIXED_NOREPLACE. Claim the range first with
          * mach_vm_map(VM_FLAGS_FIXED), which refuses rather than displaces;
