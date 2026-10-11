@@ -4,16 +4,20 @@
 
 ### Xbox static recompilation for Nintendo Switch and Linux
 
-The original Xbox (NTSC-U) release of **Need for Speed: Underground 2**, lifted
-instruction by instruction to C and running natively, with no emulator.
+The original Xbox (NTSC-U) release of **Need for Speed: Underground 2**, translated
+instruction by instruction to C and built as a native program. There is no emulator:
+the game's own x86 code runs as compiled C on top of a small runtime that stands in for
+the Xbox kernel, the NV2A GPU and the APU audio hardware.
 
 ![Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012?logo=nintendoswitch&logoColor=white)
+![Android](https://img.shields.io/badge/Android-WIP%20on%20android--port-3DDC84?logo=android&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
 ![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)
 ![OpenGL](https://img.shields.io/badge/OpenGL-renderer-5586A4?logo=opengl&logoColor=white)
+![PS Vita](https://img.shields.io/badge/PS%20Vita-planned-lightgrey?logo=playstation&logoColor=white)
 ![Version](https://img.shields.io/badge/version-0.5-blue)
 
-[Features](#-features) · [Playing on Switch](#-playing-on-switch) · [Building](#%EF%B8%8F-building) · [Configuration](#%EF%B8%8F-configuration) · [Status](#-status)
+[Features](#features) · [Playing on Switch](#playing-on-switch) · [Building](#building) · [Configuration](#configuration) · [Status](#status)
 
 </div>
 
@@ -21,25 +25,32 @@ instruction by instruction to C and running natively, with no emulator.
 
 > [!IMPORTANT]
 > **No game data is included.** You need your own copy of the Xbox disc,
-> extracted (`default.xbe`, `NFSUNDER/`, ...).
+> extracted (`default.xbe`, `NFSUNDER/`, ...). The lifted C (`gen/`) is generated from
+> your `default.xbe` and is never committed.
 
-## ✨ Features
+## Platforms
 
-- 🏁 **Native code**: the whole game runs as recompiled C, built with
-  [xboxrecomp](https://github.com/sp00nznet/xboxrecomp)
-- 🎮 **Two renderers**: Vulkan (NVK on Switch) and OpenGL, with render scaling
-  up to 4x
-- 📺 **Widescreen 16:9** by default, using the game's own wide mode
-- 🎬 **Full-screen movies** decoded with FFmpeg (VP6)
-- 🔊 **Audio** through an emulated Xbox APU, with 5.1 downmixed to stereo
-- 👥 **Two-player split screen**, with Joy-Con pairs or one sideways Joy-Con
-  per player
-- 📳 **Rumble** on Switch HD rumble and SDL controllers
-- 🔤 **Switch wording** in the menus (Start → `+`, no Xbox Live or hard-disk
-  names)
-- 💾 Saves stay next to the game in `game/UDATA`
+| Platform | State | Where |
+|---|---|---|
+| Linux x86_64 | Working: boot, movies, profile, Main Menu, Quick Race and Career, with audio | this branch |
+| Nintendo Switch | Working on hardware: boot, movies, profile, Main Menu, races | this branch |
+| Android arm64 | **Work in progress.** Written but not yet built with the NDK or run on a device | [`android-port`](../../tree/android-port) branch |
+| PS Vita | **Plan only.** No code, nothing evaluated beyond a first look | none |
 
-## 🕹️ Playing on Switch
+## Features
+
+- **Native code.** The whole game runs as recompiled C, built with
+  [xboxrecomp](https://github.com/sp00nznet/xboxrecomp).
+- **Two renderers.** OpenGL and Vulkan (NVK on Switch), with render scaling up to 4x.
+- **Widescreen 16:9** by default, through the game's own wide mode.
+- **Full-screen movies**, decoded with FFmpeg (VP6).
+- **Audio** through an emulated Xbox APU, mixed down from 5.1 to stereo.
+- **Two-player split screen**, with Joy-Con pairs or one sideways Joy-Con per player.
+- **Rumble** on Switch HD rumble and SDL controllers.
+- **Switch wording** in the menus (Start becomes `+`, no Xbox Live or hard-disk names).
+- **Saves** stay next to the game, in `game/UDATA`.
+
+## Playing on Switch
 
 1. Copy the NRO to `sdmc:/switch/nfsu2x/` (`nfsu2x-vulkan.nro` for the Vulkan
    build).
@@ -57,10 +68,10 @@ sdmc:/switch/nfsu2x/
 ```
 
 Buttons map by label (Switch A = Xbox A). Settings go in `nfsu2x_env.txt`
-(see [Configuration](#%EF%B8%8F-configuration)) and the log is written to the
+(see [Configuration](#configuration)) and the log is written to the
 same folder.
 
-## 🛠️ Building
+## Building
 
 <details open>
 <summary><b>1. Lift the XBE to C</b></summary>
@@ -94,6 +105,17 @@ VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
 
 </details>
 
+### Android and other platforms
+
+Android is developed on the [`android-port`](../../tree/android-port) branch, not here. That branch adds
+an NDK/Gradle project, an OpenGL ES 3 port of the OpenGL renderer, touch controls and an
+installer that unpacks the game ISO on the phone, then deletes the ISO. It is
+**work in progress**: it has not yet been compiled with the NDK or run on a device, so
+expect build errors and crashes. See its README for the details and known risks.
+
+**PS Vita is only a plan.** There is no Vita code. The hardware is a hard fit (ARMv7 at about
+444 MHz, 512 MB of RAM, GXM instead of OpenGL ES), so nothing is promised.
+
 ### Project layout
 
 | Path | What |
@@ -106,7 +128,7 @@ VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
 | `tools/regen.sh` | XBE → lifted C (`gen/`, never committed) |
 | `switch/build.sh` | Switch NRO build + SD-card staging |
 
-## ⚙️ Configuration
+## Configuration
 
 On Linux these are ordinary environment variables. On the Switch they go in
 `sdmc:/switch/nfsu2x/nfsu2x_env.txt`, one `KEY=VALUE` per line (`#` starts a
@@ -286,17 +308,14 @@ RECOMP_WIDESCREEN=0
 | `RECOMP_FORCE_RETURN` | Read but currently has no effect. |
 
 </details>
-## 🚦 Status
 
-| Platform | State |
-|---|---|
-| 🐧 Linux | Boot, movies, profile, Main Menu, Quick Race and Career, with audio |
-| 🎮 Switch hardware | Boot, movies, profile load/create, Main Menu, races |
+## Status
 
-Still open: cube maps on OpenGL (Vulkan has them: car reflections), bump/dot-product texture modes, fixed-function
-lighting.
+See [Platforms](#platforms) for the per-platform state. Open items shared by the renderers:
+cube maps on OpenGL (Vulkan has them, for the car reflections), bump and dot-product texture
+modes, and fixed-function lighting.
 
-## 📚 More
+## More
 
 - [`CLAUDE.md`](CLAUDE.md): detailed engineering notes
 - [`PERF_NOTES.md`](PERF_NOTES.md): performance work and measurements
