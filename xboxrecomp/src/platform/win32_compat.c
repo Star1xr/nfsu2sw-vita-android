@@ -2025,6 +2025,10 @@ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
 {
 #if defined(__APPLE__)
     memset_s(ptr, cnt, 0, cnt);
+#elif defined(__ANDROID__)
+    /* bionic's explicit_bzero is not visible under -std=gnu11 here */
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (cnt--) *p++ = 0;
 #else
     explicit_bzero(ptr, cnt);
 #endif
