@@ -42,10 +42,24 @@
 #include <switch.h>
 #define VK_USE_PLATFORM_VI_NN 1
 #endif
+#if defined(__ANDROID__)
+/* Entry points are fetched at run time (vk_dyn.h): the game can then use a
+ * driver loaded by libadrenotools (a Turnip .zip) instead of the system one. */
+#define VK_NO_PROTOTYPES
+#define VK_USE_PLATFORM_ANDROID_KHR 1
+#endif
 #include <vulkan/vulkan.h>
 #if !defined(__SWITCH__)
 #include <SDL.h>
 #include <SDL_vulkan.h>
+#endif
+#if defined(__ANDROID__)
+#include <SDL_syswm.h>
+#include <dlfcn.h>
+#include "vk_dyn.h"
+#if defined(NFSU2_ADRENOTOOLS)
+#include <adrenotools/driver.h>
+#endif
 #endif
 #include <glslang/Include/glslang_c_interface.h>
 #include <glslang/Public/resource_limits_c.h>
@@ -1902,7 +1916,85 @@ static int create_swapchain(void)
     return 1;
 }
 
+#if defined(__ANDROID__)
+#define X(n) PFN_##n p_##n;
+NV2A_VK_GLOBAL_FUNCS(X)
+NV2A_VK_INSTANCE_FUNCS(X)
+#undef X
+static PFN_vkGetInstanceProcAddr s_gipa;
+
+/* Open the Vulkan loader: the one a Turnip driver package is hooked into
+ * when RECOMP_VK_DRIVER_DIR / _NAME name one (and libadrenotools is built
+ * in), else the system's. Gets vkGetInstanceProcAddr and the global
+ * entry points. */
+static int vk_dyn_open(void)
+{
+    const char *dir = getenv("RECOMP_VK_DRIVER_DIR");
+    const char *name = getenv("RECOMP_VK_DRIVER_NAME");
+    void *lib = NULL;
+
+#if defined(NFSU2_ADRENOTOOLS)
+    if (dir && *dir && name && *name) {
+        const char *hook = getenv("RECOMP_VK_HOOK_DIR");
+        const char *tmp = getenv("RECOMP_VK_TMP_DIR");
+        lib = adrenotools_open_libvulkan(RTLD_NOW, ADRENOTOOLS_DRIVER_CUSTOM, tmp, hook,
+                                         dir, name, NULL, NULL);
+        fprintf(stderr, "  [VK] custom driver %s%s: %s\n", dir, name,
+                lib ? "loaded" : "FAILED, using the system driver");
+    }
+#else
+    if (dir && *dir && name && *name)
+        fprintf(stderr, "  [VK] custom driver requested, but this build has no libadrenotools\n");
+#endif
+    if (!lib)
+        lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+    if (!lib) {
+        LOGE("libvulkan.so: %s\n", dlerror());
+        return 0;
+    }
+    s_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr");
+    if (!s_gipa) {
+        LOGE("vkGetInstanceProcAddr missing\n");
+        return 0;
+    }
+#define X(n) p_##n = (PFN_##n)s_gipa(VK_NULL_HANDLE, #n);
+    NV2A_VK_GLOBAL_FUNCS(X)
+#undef X
+    return p_vkCreateInstance != NULL;
+}
+
+/* Everything else, once there is an instance (device-level calls go through
+ * the instance's dispatch, which is valid and costs one extra jump). */
+static void vk_dyn_load(VkInstance inst)
+{
+#define X(n) p_##n = (PFN_##n)s_gipa(inst, #n); if (!p_##n) LOGE("missing %s\n", #n);
+    NV2A_VK_INSTANCE_FUNCS(X)
+#undef X
+}
+#endif
+
 #if !defined(__SWITCH__)
+/* A surface for s_win: SDL's on desktop; on Android our own from the
+ * window's ANativeWindow, because the instance may belong to a different
+ * loader than the one SDL has open. */
+static int make_surface(void)
+{
+#if defined(__ANDROID__)
+    SDL_SysWMinfo wm;
+    VkAndroidSurfaceCreateInfoKHR ci = { VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR };
+
+    SDL_VERSION(&wm.version);
+    if (!SDL_GetWindowWMInfo(s_win, &wm) || !wm.info.android.window) {
+        LOGE("no ANativeWindow: %s\n", SDL_GetError());
+        return 0;
+    }
+    ci.window = (struct ANativeWindow *)wm.info.android.window;
+    return vkCreateAndroidSurfaceKHR(s_inst, &ci, NULL, &s_surface) == VK_SUCCESS;
+#else
+    return SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surface) ? 1 : 0;
+#endif
+}
+
 /* The window's surface went away (Android destroys it when the app is
  * backgrounded; SDL's event pump blocks until the app returns) or the
  * swapchain died with it: rebuild both. Leaves s_swapchain null when the
@@ -1920,7 +2012,7 @@ static void surface_recover(void)
         vkDestroySurfaceKHR(s_inst, s_surface, NULL);
         s_surface = VK_NULL_HANDLE;
     }
-    if (!SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surface)) {
+    if (!make_surface()) {
         s_surface = VK_NULL_HANDLE;
         return;
     }
@@ -1966,6 +2058,10 @@ static int ready(void)
         s_vtrace = e ? atoi(e) : 0;
     }
     nv2a_shader_vk = 1;
+#if defined(__ANDROID__)
+    if (!vk_dyn_open())
+        return 0;
+#endif
     glslang_initialize_process();
 
     iext[niext++] = VK_KHR_SURFACE_EXTENSION_NAME;
@@ -1989,6 +2085,11 @@ static int ready(void)
                 if (!s_win) {
                     s_headless = 1;
                 } else {
+#if defined(__ANDROID__)
+                    niext = 0;
+                    iext[niext++] = VK_KHR_SURFACE_EXTENSION_NAME;
+                    iext[niext++] = VK_KHR_ANDROID_SURFACE_EXTENSION_NAME;
+#else
                     unsigned int ne = 0;
                     const char *names[8];
                     SDL_Vulkan_GetInstanceExtensions(s_win, &ne, NULL);
@@ -1997,6 +2098,7 @@ static int ready(void)
                     niext = 0;
                     for (i = 0; i < ne; i++)
                         iext[niext++] = names[i];
+#endif
                 }
             }
         }
@@ -2021,6 +2123,9 @@ static int ready(void)
         LOGE("vkCreateInstance failed\n");
         return 0;
     }
+#if defined(__ANDROID__)
+    vk_dyn_load(s_inst);
+#endif
     n = 8;
     if (vkEnumeratePhysicalDevices(s_inst, &n, pds) != VK_SUCCESS || !n) {
         LOGE("no Vulkan device\n");
@@ -2084,8 +2189,8 @@ static int ready(void)
         }
     }
 #else
-    if (!s_headless && !SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surface)) {
-        LOGE("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
+    if (!s_headless && !make_surface()) {
+        LOGE("creating the window surface failed: %s\n", SDL_GetError());
         s_headless = 1;
     }
 #endif
@@ -3432,6 +3537,21 @@ static const Nv2aBackend s_backend = {
     vk_draw_raw,
     NV2A_BACKEND_RAW_DIRECT,
 };
+
+/* Bring the renderer up now (on the calling thread) and say whether it
+ * worked, so the caller can fall back to another one before the title
+ * starts. A window made for a failed attempt is dropped. */
+int nv2a_vk_probe(void)
+{
+    int ok = ready();
+#if !defined(__SWITCH__)
+    if (!ok && s_win) {
+        SDL_DestroyWindow(s_win);
+        s_win = NULL;
+    }
+#endif
+    return ok;
+}
 
 void nv2a_vk_install(void)
 {

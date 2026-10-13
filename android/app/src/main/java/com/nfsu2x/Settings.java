@@ -65,6 +65,28 @@ public final class Settings {
         return f == (int) f ? String.valueOf((int) f) : String.valueOf(f);
     }
 
+    // ---- renderer ------------------------------------------------------
+
+    public static final String GLES = "gles", VULKAN = "vulkan";
+
+    /** OpenGL ES unless the person chose Vulkan. */
+    public static String renderer(Context c) {
+        return VULKAN.equals(prefs(c).getString("renderer", GLES)) ? VULKAN : GLES;
+    }
+
+    public static void setRenderer(Context c, String r) {
+        prefs(c).edit().putString("renderer", VULKAN.equals(r) ? VULKAN : GLES).apply();
+    }
+
+    /** Id of the chosen custom Vulkan driver (DriverManager), "" for the system's. */
+    public static String driver(Context c) {
+        return prefs(c).getString("driver", "");
+    }
+
+    public static void setDriver(Context c, String id) {
+        prefs(c).edit().putString("driver", id == null ? "" : id).apply();
+    }
+
     /** Writes files/launcher_env.txt from the current settings. */
     public static void writeEnv(Context c, File base) {
         StringBuilder sb = new StringBuilder();
@@ -76,6 +98,16 @@ public final class Settings {
         if (fps == 60)  sb.append("RECOMP_VBLANK_HZ=119.88\n");
         if (fps == 120) sb.append("RECOMP_VBLANK_HZ=239.76\n");
         if (stretch(c)) sb.append("RECOMP_STRETCH=1\n");
+        if (VULKAN.equals(renderer(c))) {
+            sb.append("RECOMP_RENDERER=vulkan\n");
+            DriverManager.Info d = DriverManager.find(c, driver(c));
+            if (d != null) {
+                sb.append("RECOMP_VK_DRIVER_DIR=").append(d.dir.getAbsolutePath()).append("/\n");
+                sb.append("RECOMP_VK_DRIVER_NAME=").append(d.library).append('\n');
+                sb.append("RECOMP_VK_HOOK_DIR=").append(c.getApplicationInfo().nativeLibraryDir).append('\n');
+                sb.append("RECOMP_VK_TMP_DIR=").append(c.getCodeCacheDir().getAbsolutePath()).append('\n');
+            }
+        }
         try {
             Writer w = new OutputStreamWriter(
                     new FileOutputStream(new File(base, "launcher_env.txt")), "UTF-8");

@@ -11,3 +11,9 @@ if [ ! -d "$HERE/deps/SDL/.git" ]; then
     git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL "$HERE/deps/SDL"
 fi
 echo "SDL2 $SDL_TAG in $HERE/deps/SDL"
+# libadrenotools (BSD-2): loads a custom Vulkan driver (Turnip .zip).
+if [ ! -d "$HERE/deps/libadrenotools/.git" ]; then
+    git clone --depth 1 --recurse-submodules --shallow-submodules \
+        https://github.com/bylaws/libadrenotools "$HERE/deps/libadrenotools"
+fi
+echo "libadrenotools in $HERE/deps/libadrenotools"

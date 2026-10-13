@@ -9,12 +9,14 @@ plan** and has no code.
 
 The Android build is the Linux host (SDL2) packaged as an APK.
 
-1. A launcher screen finds the game ISO and extracts it, then deletes the ISO.
+1. A launcher screen finds the game ISO and extracts it, then deletes the ISO. Once the game is
+   installed it shows **Start** (nothing starts by itself) and **Settings**.
 2. SDL's `SDLActivity` loads `libmain.so`. That library is this project: the lifted C, the
    vendored xboxrecomp runtime and `src/android_host.c`.
 3. The renderer is **OpenGL ES 3.x** by default (the existing OpenGL renderer, ported; see
-   [the table below](#opengl-es-port)). The Vulkan renderer is available with
-   `-Pnfsu2.vulkan=true`.
+   [the table below](#opengl-es-port)). The Vulkan renderer is built into the same library when
+   glslang is available (CI does) and is chosen in the launcher's settings; if it cannot start
+   the game falls back to OpenGL ES.
 
 ## Requirements
 
@@ -40,8 +42,9 @@ cd android
 adb install -r app/build/outputs/apk/release/app-release.apk   # signed with the debug key
 ```
 
-For Vulkan instead of OpenGL ES, run `android/tools/build_glslang.sh` once and add
-`-Pnfsu2.vulkan=true`.
+For the Vulkan renderer as well, run `android/tools/build_glslang.sh` once; Gradle then builds
+it in automatically (`-Pnfsu2.vulkan=false` leaves it out). `fetch_deps.sh` also fetches
+libadrenotools, which lets the Vulkan renderer load a custom driver.
 
 CMake switches worth knowing (add them to `arguments` in `app/build.gradle`):
 
@@ -100,6 +103,29 @@ files/
   (Black/White), Back and Start. Landscape only.
 - Buttons map by label, like the Switch build (`RECOMP_PAD_LAYOUT=position` for the Xbox
   layout). There is no second player on touch.
+
+## Launcher settings
+
+Settings are saved on the device and written to `files/launcher_env.txt` when Start is pressed
+(the game reads it before your own `nfsu2x_env.txt`, which therefore wins).
+
+| Setting | What it does | Environment variable |
+|---|---|---|
+| Frame rate 30 / 60 / 120 | NFSU2 flips every second vblank in a race, so the display rate the game sees is raised to 2x the target. 60 and 120 are experimental: the game's clock is time based, but this is not verified, and the phone has to keep up. | `RECOMP_VBLANK_HZ` |
+| Stretch to full screen | Fills the whole screen and ignores the aspect ratio. Off by default. | `RECOMP_STRETCH=1` |
+| Resolution | 0.5x to 3x of 640 x 480. | `RECOMP_GL_SCALE` |
+| Renderer | OpenGL ES (default) or Vulkan (experimental). | `RECOMP_RENDERER=vulkan` |
+| Vulkan driver | The system driver, or a Turnip package (.zip) added with "Add driver". Press and hold a driver to remove it. | `RECOMP_VK_DRIVER_DIR`, `_NAME`, `_HOOK_DIR`, `_TMP_DIR` |
+| Edit controls | Drag the touch buttons, per-button size, size of all, opacity. | (stored in the app) |
+
+Custom drivers use [libadrenotools](https://github.com/bylaws/libadrenotools): the package is the
+usual "adrenotools" zip (a `meta.json` with `libraryName`, and the driver `.so`), unpacked into
+the app's private storage. It only works on Adreno GPUs, needs the native libraries extracted at
+install (the APK is packaged that way) and is untested on devices so far.
+
+Graphics debugging variables for the OpenGL ES renderer: `RECOMP_GL_FEEDBACK=0` (do not sample a
+copy when a draw reads its own target) and `RECOMP_GL_RING_SAFE=0` (unsynchronized vertex
+buffers, the old behaviour).
 
 ## OpenGL ES port
 

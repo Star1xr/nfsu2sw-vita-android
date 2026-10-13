@@ -11,9 +11,12 @@ def depsDir      = file("${rootDir}/deps")
 def sdlDir       = file("${depsDir}/SDL")
 def glslangDir   = findProperty('nfsu2.glslangDir') ?: "${depsDir}/glslang-android"
 def ffmpegDir    = findProperty('nfsu2.ffmpegDir') ?: "${depsDir}/ffmpeg-vp6-android"
-// OpenGL ES 3 by default; -Pnfsu2.vulkan=true builds the Vulkan renderer instead
-// (needs glslang, android/tools/build_glslang.sh).
-def useVulkan    = (findProperty('nfsu2.vulkan') ?: 'false') == 'true'
+def adrenoDir    = findProperty('nfsu2.adrenotoolsDir') ?: "${depsDir}/libadrenotools"
+// OpenGL ES 3 is always built. The Vulkan renderer is built in as well, and
+// picked in the launcher, when glslang is there (android/tools/build_glslang.sh)
+// or -Pnfsu2.vulkan=true; -Pnfsu2.vulkan=false leaves it out.
+def vulkanProp   = findProperty('nfsu2.vulkan')
+def useVulkan    = vulkanProp != null ? vulkanProp == 'true' : file("${glslangDir}/lib").exists()
 if (!sdlDir.exists()) {
     throw new GradleException("SDL2 sources missing: run android/tools/fetch_deps.sh")
 }
@@ -40,6 +43,7 @@ android {
                           "-DNFSU2_SDL2_DIR=${sdlDir}",
                           "-DCMAKE_PREFIX_PATH=${glslangDir}",
                           "-DCMAKE_FIND_ROOT_PATH=${glslangDir}",
+                          "-DNFSU2_ADRENOTOOLS_DIR=${file(adrenoDir).exists() ? adrenoDir : ''}",
                           "-DNFSU2_FFMPEG_DIR=${file(ffmpegDir).exists() ? ffmpegDir : ''}"
             }
         }
@@ -67,8 +71,9 @@ android {
 
     packaging {
         jniLibs {
-            // libmain.so is ~100 MB: keep it page-aligned in the APK and mapped from it
-            useLegacyPackaging = false
+            // libadrenotools (custom Turnip drivers) needs its hook libraries as real
+            // files in nativeLibraryDir, so the libraries are extracted at install.
+            useLegacyPackaging = true
         }
     }
 

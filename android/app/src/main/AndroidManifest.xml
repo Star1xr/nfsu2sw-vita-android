@@ -12,6 +12,7 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:hasCode="true"
+        android:extractNativeLibs="true"
         android:largeHeap="true"
         android:isGame="true"
         android:appCategory="game"
@@ -26,6 +27,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
+        <activity
+            android:name=".ControlEditorActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 
         <activity
             android:name=".NFSU2Activity"

@@ -477,7 +477,22 @@ static int game_main(void)
     {
         const char *gl = getenv("NFSU2_GL");
         if (!gl || strcmp(gl, "0") != 0) {
-#if defined(NFSU2_VULKAN)
+#if defined(NFSU2_VULKAN) && defined(__ANDROID__)
+            /* Both renderers are in the library; the launcher picks one
+             * (RECOMP_RENDERER=vulkan). OpenGL ES is the default, and the
+             * fallback when Vulkan cannot start on this device. */
+            const char *want = getenv("RECOMP_RENDERER");
+            extern void nv2a_vk_install(void);
+            extern int nv2a_vk_probe(void);
+            extern void nv2a_gl_install(void);
+            if (want && !strcmp(want, "vulkan") && nv2a_vk_probe()) {
+                nv2a_vk_install();
+            } else {
+                if (want && !strcmp(want, "vulkan"))
+                    fprintf(stderr, "[BOOT] Vulkan could not start; using OpenGL ES\n");
+                nv2a_gl_install();
+            }
+#elif defined(NFSU2_VULKAN)
             extern void nv2a_vk_install(void);
             nv2a_vk_install();
 #else
