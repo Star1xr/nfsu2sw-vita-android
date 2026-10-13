@@ -36,9 +36,9 @@ endif()
 option(NFSU2_VULKAN "Render with Vulkan instead of OpenGL" OFF)
 set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
-# ── Android: SDL2 is built in-tree; OpenGL ES 3 by default, Vulkan with
-#    -DNFSU2_VULKAN=ON (see android/README.md) ──
+# ── Android: SDL2 is built in-tree; Vulkan only (OpenGL ES removed) ──
 if(ANDROID)
+    set(NFSU2_VULKAN ON CACHE BOOL "" FORCE)
     set(NFSU2_SDL2_DIR "" CACHE PATH "SDL2 source tree (android/tools/fetch_deps.sh)")
     if(NOT EXISTS "${NFSU2_SDL2_DIR}/CMakeLists.txt")
         message(FATAL_ERROR "NFSU2_SDL2_DIR must point at an SDL2 source tree")

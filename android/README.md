@@ -12,15 +12,16 @@ The Android build is the Linux host (SDL2) packaged as an APK.
 1. A launcher screen finds the game ISO and extracts it, then deletes the ISO.
 2. SDL's `SDLActivity` loads `libmain.so`. That library is this project: the lifted C, the
    vendored xboxrecomp runtime and `src/android_host.c`.
-3. The renderer is **OpenGL ES 3.x** by default (the existing OpenGL renderer, ported; see
-   [the table below](#opengl-es-port)). The Vulkan renderer is available with
-   `-Pnfsu2.vulkan=true`.
+3. The renderer is **Vulkan 1.1+** (OpenGL ES has been removed). The Vulkan renderer uses
+   dynamic rendering when available (Vulkan 1.3 with `VK_KHR_dynamic_rendering`,
+   `VK_EXT_vertex_input_dynamic_state`), and falls back to classic `VkRenderPass` +
+   `VkFramebuffer` on older devices (Vulkan 1.1, e.g., Dimensity 920 Mali-G68 MC4).
 
 ## Requirements
 
 | | |
 |---|---|
-| Device | arm64, Android 10 (API 29) or newer, OpenGL ES 3.0 (3.2 preferred), 6 GB RAM or more. Free storage of about twice the ISO size while extracting. Vulkan build: Vulkan 1.3 with `VK_KHR_push_descriptor` and `VK_EXT_vertex_input_dynamic_state`. |
+| Device | arm64, Android 10 (API 29) or newer, Vulkan 1.1+. 6 GB RAM or more. Free storage of about twice the ISO size while extracting. Dynamic rendering path: Vulkan 1.3 with `VK_KHR_push_descriptor`, `VK_KHR_dynamic_rendering`, `VK_EXT_vertex_input_dynamic_state`. Legacy path: Vulkan 1.1. |
 | Build host | Gradle 8.9 (wrapper included), Android NDK r27 or newer, CMake 3.22 or newer, git |
 | Game | Your own original Xbox NTSC-U game **ISO**. It is extracted on the phone. |
 | Lifted C | The `gen/` directory produced by `tools/regen.sh` from your `default.xbe`. It is host independent, so the one built for Linux or Switch works. |
@@ -39,9 +40,6 @@ cd android
 ./gradlew assembleRelease -Pnfsu2.genDir=/path/to/gen
 adb install -r app/build/outputs/apk/release/app-release.apk   # signed with the debug key
 ```
-
-For Vulkan instead of OpenGL ES, run `android/tools/build_glslang.sh` once and add
-`-Pnfsu2.vulkan=true`.
 
 CMake switches worth knowing (add them to `arguments` in `app/build.gradle`):
 
@@ -101,12 +99,15 @@ files/
 - Buttons map by label, like the Switch build (`RECOMP_PAD_LAYOUT=position` for the Xbox
   layout). There is no second player on touch.
 
-## OpenGL ES port
+## OpenGL ES port (removed)
 
-`nv2a_gl` was written for desktop GL 3.3 core. On Android the same code runs on an ES 3.x
-context. `RECOMP_GLES=1` selects the ES path on a desktop, for testing.
+The OpenGL ES 3 renderer has been removed. The Android port now uses Vulkan exclusively,
+with a legacy `VkRenderPass` fallback for Vulkan 1.1 devices (e.g., Dimensity 920 Mali-G68 MC4)
+that lack `VK_KHR_dynamic_rendering` and `VK_EXT_vertex_input_dynamic_state`.
 
-| Desktop GL | OpenGL ES 3 |
+For reference, the removed ES 3 port had these differences from desktop GL 3.3:
+
+| Desktop GL | OpenGL ES 3 (removed) |
 |---|---|
 | `GL_BGRA` uploads | Bytes go in as RGBA and the texture is swizzled R<->B when sampled. Render targets are plain RGBA. |
 | BGRA vertex colours | Fetched as RGBA and swapped in the vertex shader (`u_bgra`). |
@@ -116,21 +117,16 @@ context. `RECOMP_GLES=1` selects the ES path on a desktop, for testing.
 | S3TC (DXT) | Through the extension. If the driver refuses, textures are decoded on the CPU, which was already the fallback. |
 | `#version 330 core` | `#version 300 es` with `highp` defaults. |
 
-Checked so far: all generated shaders (120 programs from random vertex microcode and combiner
-keys) pass `glslangValidator` as GLSL ES 3.00 exactly when they pass as desktop 3.30. No device
-driver has run any of it.
-
 ## What changed in the code
 
 | Where | Change |
 |---|---|
-| `CMakeLists.txt` | Android branch: `libmain.so`, SDL2 built in-tree, GL ES or Vulkan, 16 KB page alignment. |
+| `CMakeLists.txt` | Android branch: `libmain.so`, SDL2 built in-tree, Vulkan only (OpenGL ES removed), 16 KB page alignment. |
 | `android/.../LauncherActivity.java`, `XisoReader.java`, `IsoInstaller.java` | ISO detection, extraction, deletion, progress UI. |
 | `src/android_host.c` | Storage paths, `nfsu2x_env.txt`, logcat and log file, touch-pad state (JNI). |
 | `src/main.c` | `SDL_main`, big-stack game thread (as on Switch), unwinder-based crash report (bionic has no `execinfo.h`). |
 | `xboxrecomp/.../win32_compat.c` | `sched_setaffinity` (no `pthread_setaffinity_np`), `memfd_create` syscall, `TerminateThread` without `pthread_cancel`. |
-| `xboxrecomp/.../nv2a_gl/*` | The ES 3 port above. |
-| `xboxrecomp/.../nv2a_vk.c` | Surface and swapchain recreation when the app is backgrounded, identity pre-transform, fullscreen window. |
+| `xboxrecomp/.../nv2a_vk.c` | Vulkan 1.1 legacy RenderPass fallback, surface/swapchain recreation, identity pre-transform, fullscreen window. |
 | `xboxrecomp/.../xinput_device.c` | Touch pad as player 1 when no pad is attached, pad hot-plug rescan. |
 | `xboxrecomp/.../CMakeLists.txt` | No OpenSSL, null D3D8 layer, in-tree SDL2 on Android. |
 | `tools/regen.sh`, `xboxrecomp/tools/*/output.py` | The toolkit's missing `output.py` modules and the XBE analysis JSON step, needed for a clean regeneration. |
@@ -150,13 +146,9 @@ Still open, and not checked on a device:
   a call per function, slower than on the Switch's static executable. Try
   `NFSU2_ANDROID_TLS_MODEL=initial-exec`; `PERF_NOTES.md` covers the register-in-locals work that
   already reduces this.
-- **OpenGL ES drivers.** Mobile drivers are stricter than Mesa. Watch the log for
-  `[GL] ... link failed` and `incomplete` lines. If the swizzle approach to BGRA misbehaves on a
-  driver, check `RECOMP_GL_DXT=0` and the log first. The OpenGL renderer has no cube maps (car
-  reflections); the Vulkan build does.
-- **Context loss.** When the app is backgrounded SDL may take the EGL context away. The present
-  path makes it current again, but a driver that really destroys it would need every GL object
-  rebuilt, which is not implemented.
+- **Context loss.** When the app is backgrounded SDL may take the Vulkan surface away. The present
+  path recreates the swapchain and surface, but a driver that really destroys it would need every
+  Vulkan object rebuilt, which is implemented for the swapchain but not for all resources.
 - **16 KB-page devices.** The guest's 4 KB page bookkeeping (`guest_vmem.c`) has never run on a
   16 KB host.
 - **Backgrounding.** SDL blocks its event pump while the app is paused, which pauses the game

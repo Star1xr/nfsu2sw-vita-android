@@ -95,7 +95,18 @@ static VkPhysicalDeviceMemoryProperties s_memprops;
 static VkDeviceSize     s_ubo_align = 256;
 static uint32_t         s_ubo_range = 16384;
 static VkFormat         s_depth_fmt = VK_FORMAT_D24_UNORM_S8_UINT;
-static int              s_have_bc, s_have_depth_clamp;
+static int              s_have_bc, s_have_depth_clamp, s_dynamic_rendering;
+
+/* Legacy RenderPass fallback for devices without VK_KHR_dynamic_rendering
+ * (e.g., Dimensity 920 Mali-G68 MC4, older Vulkan 1.1 implementations).
+ * Uses classic VkRenderPass + VkFramebuffer instead of dynamic rendering. */
+static VkRenderPass      s_renderpass;
+static VkFramebuffer     s_framebuffer;
+static VkImageView       s_framebuffer_color_view;
+static VkImageView       s_framebuffer_depth_view;
+static VkExtent2D        s_framebuffer_extent;
+static VkSurf           *s_framebuffer_surf;
+static VkDepthBuf       *s_framebuffer_depth;
 
 static PFN_vkCmdPushDescriptorSetKHR  p_push_desc;
 static PFN_vkCmdSetVertexInputEXT     p_vertex_input;
@@ -307,10 +318,14 @@ static void barrier_all(void)
 
 static void end_rendering(void)
 {
-    if (s_in_render) {
+    if (!s_in_render)
+        return;
+    if (s_dynamic_rendering) {
         p_end_rendering(s_cb);
-        s_in_render = 0;
+    } else {
+        vkCmdEndRenderPass(s_cb);
     }
+    s_in_render = 0;
 }
 
 static VkRect2D s_sc_cur;               /* scissor set in this pass */
@@ -351,36 +366,48 @@ static void set_surface_scissor(const uint32_t *r, const VkSurf *s)
 
 static void begin_rendering(VkSurf *s, VkDepthBuf *d)
 {
-    VkRenderingAttachmentInfo ca = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-    VkRenderingAttachmentInfo da = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-    VkRenderingInfo ri = { VK_STRUCTURE_TYPE_RENDERING_INFO };
-
     if (s_in_render && s_rt == s && s_rt_depth == d)
         return;
     end_rendering();
     barrier_all();
-    ca.imageView = s->view;
-    ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    ri.renderArea.extent.width = s->pw;
-    ri.renderArea.extent.height = s->ph;
-    if (d) {
-        if (d->pw < ri.renderArea.extent.width) ri.renderArea.extent.width = d->pw;
-        if (d->ph < ri.renderArea.extent.height) ri.renderArea.extent.height = d->ph;
+    if (s_dynamic_rendering) {
+        VkRenderingAttachmentInfo ca = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        VkRenderingAttachmentInfo da = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        VkRenderingInfo ri = { VK_STRUCTURE_TYPE_RENDERING_INFO };
+
+        ca.imageView = s->view;
+        ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ca.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        ri.renderArea.extent.width = s->pw;
+        ri.renderArea.extent.height = s->ph;
+        if (d) {
+            if (d->pw < ri.renderArea.extent.width) ri.renderArea.extent.width = d->pw;
+            if (d->ph < ri.renderArea.extent.height) ri.renderArea.extent.height = d->ph;
+        }
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &ca;
+        if (d) {
+            da.imageView = d->view;
+            da.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            da.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            ri.pDepthAttachment = &da;
+            ri.pStencilAttachment = &da;
+        }
+        p_begin_rendering(s_cb, &ri);
+    } else {
+        renderpass_ensure(s, d);
+        VkRenderPassBeginInfo rpbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        rpbi.renderPass = s_renderpass;
+        rpbi.framebuffer = s_framebuffer;
+        rpbi.renderArea.offset = (VkOffset2D){ 0, 0 };
+        rpbi.renderArea.extent = s_framebuffer_extent;
+        rpbi.clearValueCount = 0;
+        rpbi.pClearValues = NULL;
+        vkCmdBeginRenderPass(s_cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
     }
-    ri.layerCount = 1;
-    ri.colorAttachmentCount = 1;
-    ri.pColorAttachments = &ca;
-    if (d) {
-        da.imageView = d->view;
-        da.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        da.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        da.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        ri.pDepthAttachment = &da;
-        ri.pStencilAttachment = &da;
-    }
-    p_begin_rendering(s_cb, &ri);
     s_in_render = 1;
     s_rt = s;
     s_rt_depth = d;
@@ -460,6 +487,121 @@ static int make_image(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags us
                       VkDeviceMemory *mem)
 {
     return make_image_n(w, h, 1, fmt, usage, aspect, img, view, mem);
+}
+
+/* Create classic RenderPass and Framebuffer for legacy path. */
+static int renderpass_create(VkSurf *s, VkDepthBuf *d)
+{
+    VkAttachmentDescription att[2] = {};
+    VkAttachmentReference color_ref = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkAttachmentReference depth_ref = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription subpass = { 0 };
+    VkRenderPassCreateInfo rpci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    VkImageView views[2];
+    uint32_t nviews = 1;
+
+    /* Color attachment */
+    att[0].format = VK_FORMAT_B8G8R8A8_UNORM;
+    att[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    att[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    att[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    att[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    att[0].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+    att[0].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    color_ref.attachment = 0;
+    color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color_ref;
+
+    if (d) {
+        /* Depth attachment */
+        att[1].format = s_depth_fmt;
+        att[1].samples = VK_SAMPLE_COUNT_1_BIT;
+        att[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[1].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        depth_ref.attachment = 1;
+        depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        subpass.pDepthStencilAttachment = &depth_ref;
+        nviews = 2;
+    }
+
+    rpci.attachmentCount = nviews;
+    rpci.pAttachments = att;
+    rpci.subpassCount = 1;
+    rpci.pSubpasses = &subpass;
+
+    VkSubpassDependency dep = {
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+    };
+    rpci.dependencyCount = 1;
+    rpci.pDependencies = &dep;
+
+    if (vkCreateRenderPass(s_dev, &rpci, NULL, &s_renderpass) != VK_SUCCESS)
+        return 0;
+
+    views[0] = s->view;
+    if (d) views[1] = d->view;
+
+    fci.renderPass = s_renderpass;
+    fci.attachmentCount = nviews;
+    fci.pAttachments = views;
+    fci.width = s->pw;
+    fci.height = s->ph;
+    fci.layers = 1;
+
+    if (vkCreateFramebuffer(s_dev, &fci, NULL, &s_framebuffer) != VK_SUCCESS) {
+        vkDestroyRenderPass(s_dev, s_renderpass, NULL);
+        s_renderpass = VK_NULL_HANDLE;
+        return 0;
+    }
+
+    s_framebuffer_color_view = s->view;
+    s_framebuffer_depth_view = d ? d->view : VK_NULL_HANDLE;
+    s_framebuffer_extent.width = s->pw;
+    s_framebuffer_extent.height = s->ph;
+    s_framebuffer_surf = s;
+    s_framebuffer_depth = d;
+
+    return 1;
+}
+
+/* Recreate framebuffer when surface size changes or depth buffer changes. */
+static void renderpass_ensure(VkSurf *s, VkDepthBuf *d)
+{
+    if (s_renderpass && s_framebuffer_surf == s && s_framebuffer_depth == d &&
+        s_framebuffer_extent.width == s->pw && s_framebuffer_extent.height == s->ph)
+        return;
+
+    if (s_framebuffer) {
+        vkDestroyFramebuffer(s_dev, s_framebuffer, NULL);
+        s_framebuffer = VK_NULL_HANDLE;
+    }
+    if (s_renderpass) {
+        vkDestroyRenderPass(s_dev, s_renderpass, NULL);
+        s_renderpass = VK_NULL_HANDLE;
+    }
+
+    renderpass_create(s, d);
 }
 
 /* ── Surfaces ─────────────────────────────────────────────────────── */
@@ -1697,13 +1839,19 @@ static VkPipeline pipe_get(const PipeKey *k)
     cb.pAttachments = &ba;
     dy.dynamicStateCount = (uint32_t)(sizeof dyn / sizeof dyn[0]);
     dy.pDynamicStates = dyn;
-    rci.colorAttachmentCount = 1;
-    rci.pColorAttachmentFormats = &cfmt;
-    if (k->depth) {
-        rci.depthAttachmentFormat = s_depth_fmt;
-        rci.stencilAttachmentFormat = s_depth_fmt;
+
+    if (s_dynamic_rendering) {
+        rci.colorAttachmentCount = 1;
+        rci.pColorAttachmentFormats = &cfmt;
+        if (k->depth) {
+            rci.depthAttachmentFormat = s_depth_fmt;
+            rci.stencilAttachmentFormat = s_depth_fmt;
+        }
+        ci.pNext = &rci;
+    } else {
+        ci.pNext = NULL;  /* No dynamic rendering info for legacy path */
     }
-    ci.pNext = &rci;
+
     ci.stageCount = 2;
     ci.pStages = st;
     ci.pVertexInputState = &vi;
@@ -1715,8 +1863,8 @@ static VkPipeline pipe_get(const PipeKey *k)
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &dy;
     ci.layout = s_layout;
-    VT("vkCreateGraphicsPipelines prog %d blend %u cmask %X depth %u topo %u\n", k->prog, k->blend,
-       k->cmask, k->depth, k->topo);
+    VT("vkCreateGraphicsPipelines prog %d blend %u cmask %X depth %u topo %u (dyn=%d)\n",
+       k->prog, k->blend, k->cmask, k->depth, k->topo, s_dynamic_rendering);
     if (vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &pipe) != VK_SUCCESS) {
         LOGE("pipeline creation failed\n");
         return VK_NULL_HANDLE;
@@ -2072,7 +2220,25 @@ static int ready(void)
         return 0;
     }
 
-#if defined(__SWITCH__)
+    /* Check for dynamic rendering support - use the already-declared f2, f13, fvi, feds */
+    f13.pNext = &fvi;
+    fvi.pNext = &feds;
+    f2.pNext = &f13;
+
+    vkGetPhysicalDeviceFeatures2(s_pd, &f2);
+
+    s_dynamic_rendering = f13.dynamicRendering == VK_TRUE &&
+                          fvi.vertexInputDynamicState == VK_TRUE &&
+                          feds.extendedDynamicState == VK_TRUE;
+
+    if (!s_dynamic_rendering) {
+        LOGE("dynamic rendering not supported, using legacy RenderPass path\n");
+    }
+
+    /* Enable features only if supported */
+    f13.dynamicRendering = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
+    fvi.vertexInputDynamicState = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
+    feds.extendedDynamicState = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
     {
         NWindow *win = nwindowGetDefault();
         VkViSurfaceCreateInfoNN sci = { VK_STRUCTURE_TYPE_VI_SURFACE_CREATE_INFO_NN };
@@ -2093,17 +2259,14 @@ static int ready(void)
     qci.queueFamilyIndex = s_qfam;
     qci.queueCount = 1;
     qci.pQueuePriorities = &prio;
-    f13.dynamicRendering = VK_TRUE;
-    fvi.vertexInputDynamicState = VK_TRUE;
-    feds.extendedDynamicState = VK_TRUE;
-    f13.pNext = &fvi;
-    f2.pNext = &f13;
     f2.features.textureCompressionBC = s_have_bc ? VK_TRUE : VK_FALSE;
     f2.features.depthClamp = s_have_depth_clamp ? VK_TRUE : VK_FALSE;
     if (!s_headless)
         dext[ndext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     dext[ndext++] = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
-    dext[ndext++] = VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME;
+    if (s_dynamic_rendering) {
+        dext[ndext++] = VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME;
+    }
     dci.pNext = &f2;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
@@ -2111,15 +2274,19 @@ static int ready(void)
     dci.ppEnabledExtensionNames = dext;
     (void)feds;
     if (vkCreateDevice(s_pd, &dci, NULL, &s_dev) != VK_SUCCESS) {
-        LOGE("vkCreateDevice failed (needs push descriptors, dynamic vertex input, Vulkan 1.3)\n");
+        LOGE("vkCreateDevice failed (needs push descriptors%s, Vulkan 1.3%s)\n",
+             s_dynamic_rendering ? ", dynamic vertex input" : "",
+             s_dynamic_rendering ? "" : " (no dynamic rendering)");
         return 0;
     }
     vkGetDeviceQueue(s_dev, s_qfam, 0, &s_queue);
 #define GET(p, name) p = (void *)vkGetDeviceProcAddr(s_dev, name); if (!p) { LOGE("missing %s\n", name); return 0; }
     GET(p_push_desc, "vkCmdPushDescriptorSetKHR");
-    GET(p_vertex_input, "vkCmdSetVertexInputEXT");
-    GET(p_begin_rendering, "vkCmdBeginRendering");
-    GET(p_end_rendering, "vkCmdEndRendering");
+    if (s_dynamic_rendering) {
+        GET(p_vertex_input, "vkCmdSetVertexInputEXT");
+        GET(p_begin_rendering, "vkCmdBeginRendering");
+        GET(p_end_rendering, "vkCmdEndRendering");
+    }
     GET(p_cull_mode, "vkCmdSetCullMode");
     GET(p_front_face, "vkCmdSetFrontFace");
     GET(p_topology, "vkCmdSetPrimitiveTopology");
