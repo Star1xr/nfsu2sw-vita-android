@@ -2357,6 +2357,14 @@ static int ready(void)
                           fvi.vertexInputDynamicState == VK_TRUE &&
                           feds.extendedDynamicState == VK_TRUE;
 
+    /* Also require Vulkan 1.3 API version for dynamic rendering.
+     * Some drivers (e.g. Adreno 650 on Android) report 1.1 but claim
+     * to support dynamic rendering features they don't actually have. */
+    if (pp.apiVersion < VK_API_VERSION_1_3) {
+        s_dynamic_rendering = 0;
+        LOGE("Vulkan API version < 1.3, forcing legacy RenderPass path\n");
+    }
+
     if (!s_dynamic_rendering) {
         LOGE("dynamic rendering not supported, using legacy RenderPass path\n");
     }
