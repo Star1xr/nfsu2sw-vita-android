@@ -81,7 +81,7 @@ jobs:
         shell: bash
         run: |
           # Force NDK 27 to match the main build
-          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.0.12077973"
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.3.13750724"
           test -d "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" || { echo "no NDK at $ANDROID_NDK_HOME"; ls "$ANDROID_SDK_ROOT/ndk" || true; exit 1; }
           git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg "$FFMPEG_SRC"
           bash tools/build_ffmpeg_vp6.sh android 2>&1 | tee ffmpeg.log | tail -n 40
@@ -93,7 +93,8 @@ jobs:
         shell: bash
         run: |
           # Force NDK 27 to match the main build (libc++ must match)
-          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.0.12077973"
+          # Runner has 27.3.13750724, not 27.0.12077973
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.3.13750724"
           test -d "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" || { echo "no NDK at $ANDROID_NDK_HOME"; ls "$ANDROID_SDK_ROOT/ndk" || true; exit 1; }
           bash android/tools/build_glslang.sh 2>&1 | tee glslang.log | tail -n 40
           ls android/deps/glslang-android/lib
