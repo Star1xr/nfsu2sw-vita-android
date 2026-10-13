@@ -12,7 +12,6 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:hasCode="true"
-        android:extractNativeLibs="true"
         android:largeHeap="true"
         android:isGame="true"
         android:appCategory="game"
