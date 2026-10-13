@@ -11,9 +11,8 @@ def depsDir      = file("${rootDir}/deps")
 def sdlDir       = file("${depsDir}/SDL")
 def glslangDir   = findProperty('nfsu2.glslangDir') ?: "${depsDir}/glslang-android"
 def ffmpegDir    = findProperty('nfsu2.ffmpegDir') ?: "${depsDir}/ffmpeg-vp6-android"
-// OpenGL ES 3 by default; -Pnfsu2.vulkan=true builds the Vulkan renderer instead
-// (needs glslang, android/tools/build_glslang.sh).
-def useVulkan    = (findProperty('nfsu2.vulkan') ?: 'false') == 'true'
+// Vulkan only on Android (OpenGL ES removed). -Pnfsu2.vulkan=false is ignored.
+def useVulkan    = true
 if (!sdlDir.exists()) {
     throw new GradleException("SDL2 sources missing: run android/tools/fetch_deps.sh")
 }
