@@ -156,6 +156,16 @@ static PFN_vkCmdSetDepthCompareOp     p_depth_op;
 static PFN_vkCmdSetStencilTestEnable  p_stencil_test;
 static PFN_vkCmdSetStencilOp          p_stencil_op;
 
+/* Legacy RenderPass functions (Vulkan 1.0 core) for devices without
+ * VK_KHR_dynamic_rendering. */
+static PFN_vkCmdBeginRenderPass       p_cmd_begin_renderpass;
+static PFN_vkCmdEndRenderPass         p_cmd_end_renderpass;
+static PFN_vkCreateRenderPass         p_create_renderpass;
+static PFN_vkCreateFramebuffer        p_create_framebuffer;
+static PFN_vkDestroyRenderPass        p_destroy_renderpass;
+static PFN_vkDestroyFramebuffer       p_destroy_framebuffer;
+static PFN_vkGetPhysicalDeviceFeatures2 p_get_physical_device_features2;
+
 /* Presentation. */
 static VkSurfaceKHR   s_surface;
 static VkSwapchainKHR s_swapchain;
@@ -344,7 +354,11 @@ static void end_rendering(void)
     if (s_dynamic_rendering) {
         p_end_rendering(s_cb);
     } else {
-        vkCmdEndRenderPass(s_cb);
+        if (s_dynamic_rendering) {
+            p_end_rendering(s_cb);
+        } else {
+            p_cmd_end_renderpass(s_cb);
+        }
     }
     s_in_render = 0;
 }
@@ -417,7 +431,11 @@ static void begin_rendering(VkSurf *s, VkDepthBuf *d)
             ri.pDepthAttachment = &da;
             ri.pStencilAttachment = &da;
         }
-        p_begin_rendering(s_cb, &ri);
+        if (s_dynamic_rendering) {
+            p_begin_rendering(s_cb, &ri);
+        } else {
+            p_cmd_begin_renderpass(s_cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+        }
     } else {
         renderpass_ensure(s, d);
         VkRenderPassBeginInfo rpbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
@@ -427,7 +445,7 @@ static void begin_rendering(VkSurf *s, VkDepthBuf *d)
         rpbi.renderArea.extent = s_framebuffer_extent;
         rpbi.clearValueCount = 0;
         rpbi.pClearValues = NULL;
-        vkCmdBeginRenderPass(s_cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+        p_cmd_begin_renderpass(s_cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
     }
     s_in_render = 1;
     s_rt = s;
@@ -577,7 +595,7 @@ static int renderpass_create(VkSurf *s, VkDepthBuf *d)
     rpci.dependencyCount = 1;
     rpci.pDependencies = &dep;
 
-    if (vkCreateRenderPass(s_dev, &rpci, NULL, &s_renderpass) != VK_SUCCESS)
+    if (p_create_renderpass(s_dev, &rpci, NULL, &s_renderpass) != VK_SUCCESS)
         return 0;
 
     views[0] = s->view;
@@ -590,8 +608,8 @@ static int renderpass_create(VkSurf *s, VkDepthBuf *d)
     fci.height = s->ph;
     fci.layers = 1;
 
-    if (vkCreateFramebuffer(s_dev, &fci, NULL, &s_framebuffer) != VK_SUCCESS) {
-        vkDestroyRenderPass(s_dev, s_renderpass, NULL);
+    if (p_create_framebuffer(s_dev, &fci, NULL, &s_framebuffer) != VK_SUCCESS) {
+        p_destroy_renderpass(s_dev, s_renderpass, NULL);
         s_renderpass = VK_NULL_HANDLE;
         return 0;
     }
@@ -614,11 +632,11 @@ static void renderpass_ensure(VkSurf *s, VkDepthBuf *d)
         return;
 
     if (s_framebuffer) {
-        vkDestroyFramebuffer(s_dev, s_framebuffer, NULL);
+        p_destroy_framebuffer(s_dev, s_framebuffer, NULL);
         s_framebuffer = VK_NULL_HANDLE;
     }
     if (s_renderpass) {
-        vkDestroyRenderPass(s_dev, s_renderpass, NULL);
+        p_destroy_renderpass(s_dev, s_renderpass, NULL);
         s_renderpass = VK_NULL_HANDLE;
     }
 
@@ -2337,7 +2355,7 @@ static int ready(void)
     fvi.pNext = &feds;
     f2.pNext = &f13;
 
-    vkGetPhysicalDeviceFeatures2(s_pd, &f2);
+    p_get_physical_device_features2(s_pd, &f2);
 
     s_dynamic_rendering = f13.dynamicRendering == VK_TRUE &&
                           fvi.vertexInputDynamicState == VK_TRUE &&
@@ -2400,6 +2418,14 @@ static int ready(void)
         GET(p_begin_rendering, "vkCmdBeginRendering");
         GET(p_end_rendering, "vkCmdEndRendering");
     }
+    /* Legacy RenderPass functions (always loaded for fallback path). */
+    GET(p_cmd_begin_renderpass, "vkCmdBeginRenderPass");
+    GET(p_cmd_end_renderpass, "vkCmdEndRenderPass");
+    GET(p_create_renderpass, "vkCreateRenderPass");
+    GET(p_create_framebuffer, "vkCreateFramebuffer");
+    GET(p_destroy_renderpass, "vkDestroyRenderPass");
+    GET(p_destroy_framebuffer, "vkDestroyFramebuffer");
+    GET(p_get_physical_device_features2, "vkGetPhysicalDeviceFeatures2");
     GET(p_cull_mode, "vkCmdSetCullMode");
     GET(p_front_face, "vkCmdSetFrontFace");
     GET(p_topology, "vkCmdSetPrimitiveTopology");
