@@ -431,11 +431,7 @@ static void begin_rendering(VkSurf *s, VkDepthBuf *d)
             ri.pDepthAttachment = &da;
             ri.pStencilAttachment = &da;
         }
-        if (s_dynamic_rendering) {
-            p_begin_rendering(s_cb, &ri);
-        } else {
-            p_cmd_begin_renderpass(s_cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
-        }
+        p_begin_rendering(s_cb, &ri);
     } else {
         renderpass_ensure(s, d);
         VkRenderPassBeginInfo rpbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
