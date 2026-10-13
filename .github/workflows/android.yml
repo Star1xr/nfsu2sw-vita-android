@@ -98,6 +98,8 @@ jobs:
           test -d "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" || { echo "no NDK at $ANDROID_NDK_HOME"; ls "$ANDROID_SDK_ROOT/ndk" || true; exit 1; }
           bash android/tools/build_glslang.sh 2>&1 | tee glslang.log | tail -n 40
           ls android/deps/glslang-android/lib
+          # Verify glslang CMake config exists
+          test -f android/deps/glslang-android/lib/cmake/glslang/glslang-config.cmake && echo "glslang CMake config found" || (echo "ERROR: glslang CMake config NOT found"; exit 1)
 
       - name: Build APK
         if: steps.xbe.outputs.have == 'true'
@@ -124,7 +126,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build.log
+          path: |
+            build.log
+            glslang.log
+            ffmpeg.log
+            regen.log
           retention-days: 7
 
       - name: Publish log tails to branch ci-logs
@@ -132,7 +138,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/logs
-          for f in regen.log build.log ffmpeg.log; do [ -f "$f" ] && tail -n 4000 "$f" > "/tmp/logs/$f"; done
+          for f in regen.log build.log ffmpeg.log glslang.log; do [ -f "$f" ] && tail -n 4000 "$f" > "/tmp/logs/$f"; done
           echo "run ${{ github.run_id }}" > /tmp/logs/RUN.txt
           cd /tmp/logs && git init -q -b ci-logs && git add . \
             && git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -q -m "logs run ${{ github.run_id }}" \
