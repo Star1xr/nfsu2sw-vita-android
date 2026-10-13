@@ -45,7 +45,7 @@
 #include <string.h>
 #include <time.h>
 
-/* ── OpenGL ES 3 (Android) ────────────────────────────────────────────
+/* â”€â”€ OpenGL ES 3 (Android) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *
  * The renderer is written for desktop GL 3.3 core; ES 3.0 differs in a few
  * places, all handled here and in gl_api/gl_vsh/gl_psh:
@@ -160,7 +160,7 @@ static void bind_tex(GLuint tex)
     }
 }
 
-/* ── Surfaces ──────────────────────────────────────────────────────── */
+/* â”€â”€ Surfaces â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 /* w, h are the surface in the title's pixels (anti-aliasing included) --
  * what the shaders, clip rectangles and texture lookups work in. pw, ph are
@@ -367,7 +367,7 @@ static GlSurf *surf_bind(const Nv2aSurface *sf, uint32_t zeta_va)
     return s;
 }
 
-/* ── Textures ─────────────────────────────────────────────────────── */
+/* â”€â”€ Textures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 typedef struct {
     uint32_t va, color, w, h, pitch, hash, bytes;
@@ -826,7 +826,7 @@ static void bind_stage(const uint32_t *regs, int i, float scale[2])
     }
 }
 
-/* ── Programs ─────────────────────────────────────────────────────── */
+/* â”€â”€ Programs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 typedef struct {
     uint64_t   vkey;            /* 0: fixed-function; else program hash */
@@ -911,7 +911,7 @@ static uint64_t prog_hash(const Nv2aRawBatch *b)
     return h ? h : 1;
 }
 
-/* ── Programs remembered across runs ─────────────────────────────────
+/* â”€â”€ Programs remembered across runs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *
  * Mesa compiles a program the first time a draw needs it, ~40 ms each on
  * the Switch; a race start needs ~40 new ones and stalled 1.5 s over two
@@ -1136,7 +1136,7 @@ static GlProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
     return p;
 }
 
-/* ── Context ──────────────────────────────────────────────────────── */
+/* â”€â”€ Context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 static int ready(void)
 {
@@ -1280,7 +1280,7 @@ __attribute__((weak)) int nv2a_gl_screen_size(int *w, int *h)
     return 0;
 }
 
-/* ── Render state ─────────────────────────────────────────────────── */
+/* â”€â”€ Render state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 static float byte_f(uint32_t v, int shift) { return (float)((v >> shift) & 0xFF) / 255.0f; }
 
@@ -1476,7 +1476,7 @@ static GLenum gl_prim(const Nv2aRawBatch *b, const uint32_t **idx, uint32_t *n)
     }
 }
 
-/* ── Back end entry points ────────────────────────────────────────── */
+/* â”€â”€ Back end entry points â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 static uint32_t zmax_of(const uint32_t *r)
 {
@@ -2298,7 +2298,7 @@ swap:
     }
 }
 
-/* ── Threaded submission (RECOMP_GL_THREAD=1) ─────────────────────────
+/* â”€â”€ Threaded submission (RECOMP_GL_THREAD=1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *
  * On the Switch the executor thread spent ~35 us per draw in Mesa and ~18 us
  * decoding the pushbuffer, one after the other, and that thread was the frame
