@@ -141,6 +141,7 @@ typedef ptrdiff_t     GLintptr;
     X(void, glActiveTexture, (GLenum)) \
     X(void, glTexImage2D, (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *)) \
     X(void, glTexSubImage2D, (GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *)) \
+    X(void, glCopyTexSubImage2D, (GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei)) \
     X(void, glCompressedTexImage2D, (GLenum, GLint, GLenum, GLsizei, GLsizei, GLint, GLsizei, const void *)) \
     X(void, glTexParameteri, (GLenum, GLenum, GLint)) \
     X(void, glGenFramebuffers, (GLsizei, GLuint *)) \
@@ -259,6 +260,7 @@ static inline void glDepthRange(double n, double f)
 #define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT 0x83F2
 #define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT 0x83F3
 #define glTexSubImage2D          p_glTexSubImage2D
+#define glCopyTexSubImage2D      p_glCopyTexSubImage2D
 #define glTexParameteri          p_glTexParameteri
 #define glGenFramebuffers        p_glGenFramebuffers
 #define glDeleteFramebuffers     p_glDeleteFramebuffers

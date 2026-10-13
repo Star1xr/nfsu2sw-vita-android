@@ -715,6 +715,49 @@ static void rt_scale(uint32_t w, uint32_t h, uint32_t sw, uint32_t sh,
     if (h < lh) scale[1] *= (float)h / (float)lh;
 }
 
+/* A draw that samples the surface it renders into (a post-processing pass
+ * reading the back buffer while writing it). Desktop drivers happen to
+ * return the old pixels; on a tile-based GPU (Adreno, Mali) it is undefined
+ * and shows up as flickering, colour-changing rectangles in races and the
+ * open world -- the only places with such passes. Sample a copy instead.
+ * RECOMP_GL_FEEDBACK=0 turns the copy off. */
+static GlSurf *s_draw_surf;             /* what the current draw renders into */
+static GLuint  s_fb_tex;
+static uint32_t s_fb_w, s_fb_h;
+
+static GLuint feedback_copy(const GlSurf *rt)
+{
+    static int on = -1, logged;
+    if (on < 0) {
+        const char *e = getenv("RECOMP_GL_FEEDBACK");
+        on = !(e && *e == '0');
+    }
+    if (!on)
+        return rt->tex;
+    if (!logged) {
+        logged = 1;
+        fprintf(stderr, "  [GL] a draw samples its own target 0x%08X: sampling a copy\n", rt->va);
+    }
+    if (!s_fb_tex || s_fb_w != rt->pw || s_fb_h != rt->ph) {
+        if (s_fb_tex) {
+            glDeleteTextures(1, &s_fb_tex);
+            tex_bind_forget();
+        }
+        glGenTextures(1, &s_fb_tex);
+        tex_param_forget(s_fb_tex);
+        glBindTexture(GL_TEXTURE_2D, s_fb_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)rt->pw, (GLsizei)rt->ph, 0,
+                     NV2A_FMT_BGRA, GL_UNSIGNED_BYTE, NULL);
+        s_fb_w = rt->pw;
+        s_fb_h = rt->ph;
+        tex_bind_forget();
+    }
+    bind_tex(s_fb_tex);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, rt->fbo);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, (GLsizei)rt->pw, (GLsizei)rt->ph);
+    return s_fb_tex;
+}
+
 /* Bind stage `i` from the method shadow; returns the texcoord scale. */
 static void bind_stage(const uint32_t *regs, int i, float scale[2])
 {
@@ -752,7 +795,7 @@ static void bind_stage(const uint32_t *regs, int i, float scale[2])
     s_palette_va = s_batch->pal_va[i];
     rt = surf_find(va);
     if (rt) {
-        tex = rt->tex;
+        tex = rt == s_draw_surf ? feedback_copy(rt) : rt->tex;
         /* The image the title samples is the logical one; the FBO holds it
          * at the anti-aliased size. Normalised coordinates cover both. */
         rt_scale(w, h, rt->w, rt->h, rt->aa_sx, rt->aa_sy, scale);
@@ -1465,9 +1508,22 @@ static GLintptr ring_alloc(GlRing *g, GLsizeiptr size, void **ptr)
         at = 0;
     }
     g->off = at + size;
-    *ptr = glMapBufferRange(g->target, at, size,
-                            GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT
-                            );
+    {
+        /* RECOMP_GL_RING_SAFE=1: let the driver order the write against
+         * earlier draws -- for a driver that mishandles an unsynchronized
+         * map. */
+        static int safe = -1;
+        if (safe < 0) {
+            const char *e = getenv("RECOMP_GL_RING_SAFE");
+            /* On by default on ES (Adreno/Mali tile renderers, where
+             * RECOMP_GL_FINISH=1 made the flickering textures go away);
+             * RECOMP_GL_RING_SAFE=0 restores the unsynchronized map. */
+            safe = e && *e ? *e != '0' : nv2a_gl_is_es;
+        }
+        *ptr = glMapBufferRange(g->target, at, size,
+                                safe ? (GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT)
+                                     : (GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT));
+    }
     /* No GL_MAP_INVALIDATE_RANGE_BIT: nothing the GPU may still read is
      * ever overwritten, and with it nouveau gave each map a staging buffer
      * of its own (nouveau_bo_new + map + free: ~3% of the GL thread). */
@@ -1710,8 +1766,10 @@ static void gl_draw_raw(const Nv2aRawBatch *b)
     {
         uint32_t texs = s_hz_texs;
         uint64_t t0 = hz_now();
+        s_draw_surf = s;
         for (i = 0; i < 4; i++)
             bind_stage(r, (int)i, tscale[i]);
+        s_draw_surf = NULL;
         if (s_hz_texs != texs)
             s_hz_tex_ns += hz_now() - t0;
     }
@@ -2204,6 +2262,15 @@ static void gl_flip(void)
         float scale = (float)ww / lw < (float)wh / lh ? (float)ww / lw : (float)wh / lh;
         int dw = (int)(lw * scale), dh = (int)(lh * scale);
         int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
+        /* RECOMP_STRETCH=1: fill the whole screen, ignoring the aspect ratio. */
+        {
+            static int stretch = -1;
+            if (stretch < 0) {
+                const char *e = getenv("RECOMP_STRETCH");
+                stretch = e && e[0] && e[0] != '0';
+            }
+            if (stretch) { dw = ww; dh = wh; dx = 0; dy = 0; }
+        }
         /* Scissored to the picture: Switch Mesa (nouveau) runs a scaled,
          * flipped blit over more than the destination rectangle, and the
          * pillarbox bars filled with the source's edge columns stretched
