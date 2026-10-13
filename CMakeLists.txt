@@ -35,7 +35,6 @@ endif()
 # links mesa-switch's static NVK (NVK_SDK) and builds nfsu2x-vulkan.nro. On
 # Android it is built in addition to OpenGL ES and chosen at run time.
 option(NFSU2_VULKAN "Render with Vulkan instead of OpenGL" OFF)
-set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
 # ── Android: SDL2 is built in-tree; Vulkan only (OpenGL ES removed) ──
 if(ANDROID)
@@ -49,6 +48,8 @@ if(ANDROID)
     set(SDL_TEST OFF CACHE BOOL "" FORCE)
     add_subdirectory(${NFSU2_SDL2_DIR} ${CMAKE_BINARY_DIR}/SDL2)
 endif()
+
+set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
 # libadrenotools: loads a custom Vulkan driver (Turnip .zip) for the Vulkan
 # renderer. Its hook libraries are shared libraries of this project, so they
