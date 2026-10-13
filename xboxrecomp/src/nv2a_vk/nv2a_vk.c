@@ -111,13 +111,25 @@ static uint32_t         s_ubo_range = 16384;
 static VkFormat         s_depth_fmt = VK_FORMAT_D24_UNORM_S8_UINT;
 static int              s_have_bc, s_have_depth_clamp, s_dynamic_rendering;
 
+/* Surface and depth buffer types - moved here so Legacy RenderPass can use them. */
+typedef struct {
+    uint32_t va, w, h, pw, ph;
+    VkImage image; VkImageView view; VkDeviceMemory mem;
+    uint32_t used;
+    uint32_t aa_sx, aa_sy;
+    int dirty;                 /* written since the last barrier */
+    uint32_t gen;              /* bumped by every draw and clear into it */
+} VkSurf;
+
+typedef struct {
+    uint32_t va, pw, ph;
+    VkImage image; VkImageView view; VkDeviceMemory mem;
+    uint32_t used;
+} VkDepthBuf;
+
 /* Legacy RenderPass fallback for devices without VK_KHR_dynamic_rendering
  * (e.g., Dimensity 920 Mali-G68 MC4, older Vulkan 1.1 implementations).
  * Uses classic VkRenderPass + VkFramebuffer instead of dynamic rendering. */
-
-/* Forward declarations for types defined later. */
-struct VkSurf;
-struct VkDepthBuf;
 
 /* Forward declarations for functions defined later. */
 static int renderpass_create(VkSurf *s, VkDepthBuf *d);
@@ -290,20 +302,6 @@ static VkDeviceSize ring_alloc(VkDeviceSize size, VkDeviceSize align, void **ptr
 /* w, h are the surface in the title's pixels (anti-aliasing included) --
  * what the shaders, clip rectangles and texture lookups work in. pw, ph are
  * the image: w, h times the render scale. */
-typedef struct {
-    uint32_t va, w, h, pw, ph;
-    VkImage image; VkImageView view; VkDeviceMemory mem;
-    uint32_t used;
-    uint32_t aa_sx, aa_sy;
-    int dirty;                 /* written since the last barrier */
-    uint32_t gen;              /* bumped by every draw and clear into it */
-} VkSurf;
-
-typedef struct {
-    uint32_t va, pw, ph;
-    VkImage image; VkImageView view; VkDeviceMemory mem;
-    uint32_t used;
-} VkDepthBuf;
 
 #define VK_MAX_SURF 32
 #define VK_MAX_DEPTH 16
