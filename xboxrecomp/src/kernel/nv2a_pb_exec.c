@@ -1005,43 +1005,13 @@ static void current_surface(Nv2aSurface *out)
     out->clip_y          = s_gpu.clip_y;
 }
 
-static int sample_texture(const uint8_t *mem, const Texture *t, uint32_t u, uint32_t v,
-                            uint32_t *argb);
-
-/* Snapshot buffer for texture uploads (see nv2a_backend_decode_texture). */
-static uint8_t *s_tex_snap;
-static size_t s_tex_snap_cap;
-
-/* Sparse FNV-1a over a byte range: ~256 samples plus the tail word. Cheap
- * enough to run twice per upload; only used to detect a torn snapshot. */
-static uint32_t tex_snap_hash(const uint8_t *p, size_t n)
-{
-    uint32_t h = 2166136261u ^ (uint32_t)n, w;
-    size_t step, i;
-
-    if (!n)
-        return h;
-    step = n / 256;
-    if (step < 4) step = 4;
-    step &= ~3u;
-    for (i = 0; i + 4 <= n; i += step) {
-        memcpy(&w, p + i, 4);
-        h = (h ^ w) * 16777619u;
-    }
-    memcpy(&w, p + n - 4, 4);
-    return (h ^ w) * 16777619u;
-}
+static int sample_texture(const Texture *t, uint32_t u, uint32_t v, uint32_t *argb);
 
 int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out)
 {
     Texture t;
     uint32_t x, y;
     int ok = 1;
-    const uint8_t *guest;
-    const uint8_t *snap;
-    size_t snap_size;
-    uint32_t bb;
-    static int use_snap = -1;
 
     /* RECOMP_TEX_STATS=1: name each format and size decoded, the first time
      * and every 1000th time -- which decode is worth a fast path. */
@@ -1060,55 +1030,12 @@ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out)
     }
 
     /* Linear 32-bit ARGB is already the output layout: copy rows, not
-     * texels. A movie frame is one of these every frame.
-     *
-     * The copy below reads from the snapshot (snap), not guest RAM: world
-     * textures stream in from worker threads while the renderer reads them,
-     * and decoding straight from guest memory tears blocks -- the
-     * colour-flickering rectangles seen on Adreno, where every DXT texture
-     * takes this path. The memcpy is microseconds; a sparse hash
-     * before/after catches a tear during the copy itself and retries once.
-     * RECOMP_TEX_SNAP=0 keeps the old direct-read path. */
-    if (!tex->width || !tex->height)
-        return 0;
-    bb = d3d8_format_dxt_block_bytes(tex->color);
-    if (bb)
-        snap_size = ((size_t)(tex->width + 3) / 4) * ((size_t)(tex->height + 3) / 4) * bb;
-    else if (tex->pitch)
-        snap_size = (size_t)tex->pitch * tex->height + (size_t)tex->width * 4;
-    else
-        snap_size = (size_t)tex->width * tex->height * 4;  /* swizzled: 4 B/px upper bound */
-    if (!snap_size || snap_size > (64u << 20))
-        return 0;
-    if (use_snap < 0) {
-        const char *e = getenv("RECOMP_TEX_SNAP");
-        use_snap = !(e && *e == '0');
-    }
-    guest = (const uint8_t *)xbox_GetMemoryOffset() + tex->offset;
-    snap = guest;
-    if (use_snap) {
-        if (snap_size > s_tex_snap_cap) {
-            uint8_t *nb = (uint8_t *)realloc(s_tex_snap, snap_size);
-            if (nb) {
-                s_tex_snap = nb;
-                s_tex_snap_cap = snap_size;
-            }
-        }
-        if (s_tex_snap && snap_size <= s_tex_snap_cap) {
-            uint32_t h1 = tex_snap_hash(guest, snap_size);
-            memcpy(s_tex_snap, guest, snap_size);
-            if (h1 != tex_snap_hash(s_tex_snap, snap_size)) {
-                /* Torn copy: one retry from (presumably) settled memory. */
-                memcpy(s_tex_snap, guest, snap_size);
-            }
-            snap = s_tex_snap;
-        }
-    }
-
+     * texels. A movie frame is one of these every frame. */
     if ((tex->color == 0x12 || tex->color == 0x1E) && tex->pitch >= tex->width * 4) {
+        const uint8_t *src = (const uint8_t *)xbox_GetMemoryOffset() + tex->offset;
         for (y = 0; y < tex->height; y++) {
             uint32_t *row = argb_out + (size_t)y * tex->width;
-            memcpy(row, snap + (size_t)y * tex->pitch, (size_t)tex->width * 4);
+            memcpy(row, src + (size_t)y * tex->pitch, (size_t)tex->width * 4);
             if (tex->color == 0x1E)
                 for (x = 0; x < tex->width; x++)
                     row[x] |= 0xFF000000u;
@@ -1116,7 +1043,7 @@ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out)
         return 1;
     }
     memset(&t, 0, sizeof t);
-    t.offset = 0;               /* snap holds the image from texel (0,0) */
+    t.offset = tex->offset;
     t.width  = tex->width;
     t.height = tex->height;
     t.pitch  = tex->pitch;
@@ -1126,7 +1053,7 @@ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out)
     t.valid  = 1;
     for (y = 0; y < tex->height && ok; y++)
         for (x = 0; x < tex->width; x++)
-            if (!sample_texture(snap, &t, x, y, &argb_out[(size_t)y * tex->width + x])) {
+            if (!sample_texture(&t, x, y, &argb_out[(size_t)y * tex->width + x])) {
                 ok = 0;
                 break;
             }
@@ -1342,9 +1269,9 @@ static uint32_t linear_twin(uint32_t fmt)
 
 /* Texel (u, v) of `t` -- a parameter, not s_gpu.tex, so a back end's thread
  * can decode while the executor goes on changing texture state. */
-static int sample_texture(const uint8_t *mem, const Texture *t, uint32_t u, uint32_t v,
-                            uint32_t *argb)
+static int sample_texture(const Texture *t, uint32_t u, uint32_t v, uint32_t *argb)
 {
+    const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
     const uint8_t *p;
     uint32_t fmt;
 
@@ -1526,7 +1453,7 @@ static void dump_texture_bmp(uint32_t seq)
         for (x = 0; x < w; x++) {
             uint32_t argb = 0, a;
             uint8_t px[3];
-            if (!sample_texture((const uint8_t *)xbox_GetMemoryOffset(), &s_gpu.tex, x, h - 1 - y, &argb))
+            if (!sample_texture(&s_gpu.tex, x, h - 1 - y, &argb))
                 argb = 0;
             a = (argb >> 24) & 0xFFu;
             /* over mid-grey, so an alpha-only page is visible either way */
@@ -1690,7 +1617,7 @@ static void raster_triangle(const float a[2], const float b[2],
                 float sv = (w1 * uv[0][1] + w2 * uv[1][1] + w0 * uv[2][1]) / area;
                 if (su < 0.0f) su = 0.0f;
                 if (sv < 0.0f) sv = 0.0f;
-                if (sample_texture((const uint8_t *)xbox_GetMemoryOffset(), &s_gpu.tex, (uint32_t)su, (uint32_t)sv, &texel)) {
+                if (sample_texture(&s_gpu.tex, (uint32_t)su, (uint32_t)sv, &texel)) {
                     put_pixel(mem, bpp, x, y, texel);
                     continue;
                 }
