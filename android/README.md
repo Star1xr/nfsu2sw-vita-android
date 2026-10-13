@@ -13,16 +13,16 @@ The Android build is the Linux host (SDL2) packaged as an APK.
    installed it shows **Start** (nothing starts by itself) and **Settings**.
 2. SDL's `SDLActivity` loads `libmain.so`. That library is this project: the lifted C, the
    vendored xboxrecomp runtime and `src/android_host.c`.
-3. The renderer is **OpenGL ES 3.x** by default (the existing OpenGL renderer, ported; see
-   [the table below](#opengl-es-port)). The Vulkan renderer is built into the same library when
-   glslang is available (CI does) and is chosen in the launcher's settings; if it cannot start
-   the game falls back to OpenGL ES.
+3. The renderer is **Vulkan 1.1+** (OpenGL ES has been removed). The Vulkan renderer uses
+   dynamic rendering when available (Vulkan 1.3 with `VK_KHR_dynamic_rendering`,
+   `VK_EXT_vertex_input_dynamic_state`), and falls back to classic `VkRenderPass` +
+   `VkFramebuffer` on older devices (Vulkan 1.1, e.g., Dimensity 920 Mali-G68 MC4).
 
 ## Requirements
 
 | | |
 |---|---|
-| Device | arm64, Android 10 (API 29) or newer, OpenGL ES 3.0 (3.2 preferred), 6 GB RAM or more. Free storage of about twice the ISO size while extracting. Vulkan build: Vulkan 1.3 with `VK_KHR_push_descriptor` and `VK_EXT_vertex_input_dynamic_state`. |
+| Device | arm64, Android 10 (API 29) or newer, Vulkan 1.1+. 6 GB RAM or more. Free storage of about twice the ISO size while extracting. Dynamic rendering path: Vulkan 1.3 with `VK_KHR_push_descriptor`, `VK_KHR_dynamic_rendering`, `VK_EXT_vertex_input_dynamic_state`. Legacy path: Vulkan 1.1. |
 | Build host | Gradle 8.9 (wrapper included), Android NDK r27 or newer, CMake 3.22 or newer, git |
 | Game | Your own original Xbox NTSC-U game **ISO**. It is extracted on the phone. |
 | Lifted C | The `gen/` directory produced by `tools/regen.sh` from your `default.xbe`. It is host independent, so the one built for Linux or Switch works. |
@@ -31,20 +31,12 @@ The Android build is the Linux host (SDL2) packaged as an APK.
 
 ### Locally
 
-```sh
-export ANDROID_NDK_HOME=/path/to/ndk
-android/tools/fetch_deps.sh                 # SDL2 sources -> android/deps/SDL
-# Optional, for the movies (otherwise the slow lifted VP6 decoder plays them):
-tools/build_ffmpeg_vp6.sh android           # PREFIX=android/deps/ffmpeg-vp6-android
+SDL2 release-2.30.9 in /data/data/com.termux/files/home/nfsu2privaterepo/android/deps/SDL
+Submodule path 'lib/linkernsbypass': checked out 'aa3975893d83ef1bc84c321ec60c65fbf1287887'
+libadrenotools in /data/data/com.termux/files/home/nfsu2privaterepo/android/deps/libadrenotools
 
-cd android
-./gradlew assembleRelease -Pnfsu2.genDir=/path/to/gen
-adb install -r app/build/outputs/apk/release/app-release.apk   # signed with the debug key
-```
-
-For the Vulkan renderer as well, run `android/tools/build_glslang.sh` once; Gradle then builds
-it in automatically (`-Pnfsu2.vulkan=false` leaves it out). `fetch_deps.sh` also fetches
-libadrenotools, which lets the Vulkan renderer load a custom driver.
+Run `android/tools/build_glslang.sh` once; Gradle then builds it in automatically.
+`fetch_deps.sh` also fetches libadrenotools, which lets the Vulkan renderer load a custom driver.
 
 CMake switches worth knowing (add them to `arguments` in `app/build.gradle`):
 
@@ -67,9 +59,7 @@ lifted C is derived from it. The tail of each build log is pushed to a `ci-logs`
 On first start the app creates `Android/data/com.nfsu2x.nfsu2/files/iso/` and shows its path.
 Put the ISO there:
 
-```sh
-android/tools/push_game.sh /path/to/game.iso    # adb; Android 11 and newer hide Android/data from file managers
-```
+
 
 Or tap **Choose ISO file** and pick it anywhere (it is read in place, without copying). The app
 then:
@@ -85,15 +75,7 @@ The reader handles trimmed XISOs and raw dumps (partition offsets 0, `0x18300000
 offsets (`tools/XisoSelfTest.java`), not on a real disc yet. An already extracted disc can be
 pushed to `files/game/` instead.
 
-```
-files/
-  iso/               drop the ISO here (directly in files/ also works)
-  game/              the extracted disc: default.xbe, NFSUNDER/, ... and the UDATA/ saves
-  save/              runtime saves
-  nfsu2x_env.txt     optional KEY=VALUE settings, the same keys as the main README
-  nfsu2x_log.txt     log of the last run (also in logcat, tag "nfsu2")
-  progcache.bin ...  shader caches
-```
+
 
 ## Controls
 
@@ -114,7 +96,6 @@ Settings are saved on the device and written to `files/launcher_env.txt` when St
 | Frame rate 30 / 60 / 120 | NFSU2 flips every second vblank in a race, so the display rate the game sees is raised to 2x the target. 60 and 120 are experimental: the game's clock is time based, but this is not verified, and the phone has to keep up. | `RECOMP_VBLANK_HZ` |
 | Stretch to full screen | Fills the whole screen and ignores the aspect ratio. Off by default. | `RECOMP_STRETCH=1` |
 | Resolution | 0.5x to 3x of 640 x 480. | `RECOMP_GL_SCALE` |
-| Renderer | OpenGL ES (default) or Vulkan (experimental). | `RECOMP_RENDERER=vulkan` |
 | Vulkan driver | The system driver, or a Turnip package (.zip) added with "Add driver". Press and hold a driver to remove it. | `RECOMP_VK_DRIVER_DIR`, `_NAME`, `_HOOK_DIR`, `_TMP_DIR` |
 | Edit controls | Drag the touch buttons, per-button size, size of all, opacity. | (stored in the app) |
 
@@ -123,16 +104,15 @@ usual "adrenotools" zip (a `meta.json` with `libraryName`, and the driver `.so`)
 the app's private storage. It only works on Adreno GPUs, needs the native libraries extracted at
 install (the APK is packaged that way) and is untested on devices so far.
 
-Graphics debugging variables for the OpenGL ES renderer: `RECOMP_GL_FEEDBACK=0` (do not sample a
-copy when a draw reads its own target) and `RECOMP_GL_RING_SAFE=0` (unsynchronized vertex
-buffers, the old behaviour).
+## OpenGL ES port (removed)
 
-## OpenGL ES port
+The OpenGL ES 3 renderer has been removed. The Android port now uses Vulkan exclusively,
+with a legacy `VkRenderPass` fallback for Vulkan 1.1 devices (e.g., Dimensity 920 Mali-G68 MC4)
+that lack `VK_KHR_dynamic_rendering` and `VK_EXT_vertex_input_dynamic_state`.
 
-`nv2a_gl` was written for desktop GL 3.3 core. On Android the same code runs on an ES 3.x
-context. `RECOMP_GLES=1` selects the ES path on a desktop, for testing.
+For reference, the removed ES 3 port had these differences from desktop GL 3.3:
 
-| Desktop GL | OpenGL ES 3 |
+| Desktop GL | OpenGL ES 3 (removed) |
 |---|---|
 | `GL_BGRA` uploads | Bytes go in as RGBA and the texture is swizzled R<->B when sampled. Render targets are plain RGBA. |
 | BGRA vertex colours | Fetched as RGBA and swapped in the vertex shader (`u_bgra`). |
@@ -142,21 +122,16 @@ context. `RECOMP_GLES=1` selects the ES path on a desktop, for testing.
 | S3TC (DXT) | Through the extension. If the driver refuses, textures are decoded on the CPU, which was already the fallback. |
 | `#version 330 core` | `#version 300 es` with `highp` defaults. |
 
-Checked so far: all generated shaders (120 programs from random vertex microcode and combiner
-keys) pass `glslangValidator` as GLSL ES 3.00 exactly when they pass as desktop 3.30. No device
-driver has run any of it.
-
 ## What changed in the code
 
 | Where | Change |
 |---|---|
-| `CMakeLists.txt` | Android branch: `libmain.so`, SDL2 built in-tree, GL ES or Vulkan, 16 KB page alignment. |
+| `CMakeLists.txt` | Android branch: `libmain.so`, SDL2 built in-tree, Vulkan only (OpenGL ES removed), 16 KB page alignment. |
 | `android/.../LauncherActivity.java`, `XisoReader.java`, `IsoInstaller.java` | ISO detection, extraction, deletion, progress UI. |
 | `src/android_host.c` | Storage paths, `nfsu2x_env.txt`, logcat and log file, touch-pad state (JNI). |
 | `src/main.c` | `SDL_main`, big-stack game thread (as on Switch), unwinder-based crash report (bionic has no `execinfo.h`). |
 | `xboxrecomp/.../win32_compat.c` | `sched_setaffinity` (no `pthread_setaffinity_np`), `memfd_create` syscall, `TerminateThread` without `pthread_cancel`. |
-| `xboxrecomp/.../nv2a_gl/*` | The ES 3 port above. |
-| `xboxrecomp/.../nv2a_vk.c` | Surface and swapchain recreation when the app is backgrounded, identity pre-transform, fullscreen window. |
+| `xboxrecomp/.../nv2a_vk.c` | Vulkan 1.1 legacy RenderPass fallback, surface/swapchain recreation, identity pre-transform, fullscreen window. |
 | `xboxrecomp/.../xinput_device.c` | Touch pad as player 1 when no pad is attached, pad hot-plug rescan. |
 | `xboxrecomp/.../CMakeLists.txt` | No OpenSSL, null D3D8 layer, in-tree SDL2 on Android. |
 | `tools/regen.sh`, `xboxrecomp/tools/*/output.py` | The toolkit's missing `output.py` modules and the XBE analysis JSON step, needed for a clean regeneration. |
@@ -176,13 +151,9 @@ Still open, and not checked on a device:
   a call per function, slower than on the Switch's static executable. Try
   `NFSU2_ANDROID_TLS_MODEL=initial-exec`; `PERF_NOTES.md` covers the register-in-locals work that
   already reduces this.
-- **OpenGL ES drivers.** Mobile drivers are stricter than Mesa. Watch the log for
-  `[GL] ... link failed` and `incomplete` lines. If the swizzle approach to BGRA misbehaves on a
-  driver, check `RECOMP_GL_DXT=0` and the log first. The OpenGL renderer has no cube maps (car
-  reflections); the Vulkan build does.
-- **Context loss.** When the app is backgrounded SDL may take the EGL context away. The present
-  path makes it current again, but a driver that really destroys it would need every GL object
-  rebuilt, which is not implemented.
+- **Context loss.** When the app is backgrounded SDL may take the Vulkan surface away. The present
+  path recreates the swapchain and surface, but a driver that really destroys it would need every
+  Vulkan object rebuilt, which is implemented for the swapchain but not for all resources.
 - **16 KB-page devices.** The guest's 4 KB page bookkeeping (`guest_vmem.c`) has never run on a
   16 KB host.
 - **Backgrounding.** SDL blocks its event pump while the app is paused, which pauses the game
