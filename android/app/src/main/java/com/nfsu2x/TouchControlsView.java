@@ -33,6 +33,12 @@ public class TouchControlsView extends View {
     }
 
     private final Listener listener;
+    private ControlLayout layout;
+    private boolean editMode;
+    private int selected = -1;                  // editor: button index, STICK, or -1
+    private Runnable onSelect;
+    private float dragDx, dragDy;
+    private final RectF[] defaults = new RectF[ControlLayout.BUTTONS];
     private final Btn[] btns = {
             new Btn("A", A, true), new Btn("B", B, true), new Btn("X", X, true), new Btn("Y", Y, true),
             new Btn("LT", LT, false), new Btn("RT", RT, false),
@@ -54,6 +60,8 @@ public class TouchControlsView extends View {
     public TouchControlsView(Context c, Listener l) {
         super(c);
         listener = l;
+        layout = ControlLayout.load(c);
+        setAlpha(layout.opacity);
         setFocusable(false);
         stroke.setStyle(Paint.Style.STROKE);
         stroke.setColor(0xCCFFFFFF);
@@ -68,7 +76,7 @@ public class TouchControlsView extends View {
         float m = 4 * u;
         stroke.setStrokeWidth(0.35f * u);
         text.setTextSize(4.2f * u);
-        stickRadius = 13 * u;
+        stickRadius = 13 * u * layout.stickScale * layout.globalScale;
         stickZoneRight = w * 0.42f;
 
         // face buttons, diamond in the lower right
@@ -87,6 +95,120 @@ public class TouchControlsView extends View {
         float sw = 14 * u, sh = 7 * u;
         btns[8].r.set(w / 2f - sw - u, m, w / 2f - u, m + sh);
         btns[9].r.set(w / 2f + u, m, w / 2f + sw + u, m + sh);
+        for (int i = 0; i < btns.length; i++)
+            defaults[i] = new RectF(btns[i].r);
+        applyLayout();
+    }
+
+    /** Default rectangles, scaled and moved by the saved layout. */
+    private void applyLayout() {
+        int w = getWidth(), h = getHeight();
+        if (w == 0 || defaults[0] == null)
+            return;
+        float u = Math.min(w, h) / 100f;
+        stickRadius = 13 * u * layout.stickScale * layout.globalScale;
+        for (int i = 0; i < btns.length; i++) {
+            RectF d = defaults[i];
+            float k = layout.scale[i] * layout.globalScale;
+            float cx = d.centerX(), cy = d.centerY();
+            if (!Float.isNaN(layout.x[i]) && !Float.isNaN(layout.y[i])) {
+                cx = layout.x[i] * w;
+                cy = layout.y[i] * h;
+            }
+            float hw = d.width() / 2 * k, hh = d.height() / 2 * k;
+            btns[i].r.set(cx - hw, cy - hh, cx + hw, cy + hh);
+        }
+    }
+
+    // ---- editor API (ControlEditorActivity) -----------------------------
+
+    public void setEditMode(boolean on, Runnable selectionChanged) {
+        editMode = on;
+        onSelect = selectionChanged;
+        setAlpha(on ? 1f : layout.opacity);
+        invalidate();
+    }
+
+    public int getSelected() { return selected; }
+
+    /** 50..200 (%) of the selected button, or of the stick; -1 when nothing is selected. */
+    public int getSelectedSizePercent() {
+        if (selected < 0) return -1;
+        float v = selected == ControlLayout.STICK ? layout.stickScale : layout.scale[selected];
+        return Math.round(v * 100);
+    }
+
+    public void setSelectedSizePercent(int pct) {
+        if (selected < 0) return;
+        float v = pct / 100f;
+        if (selected == ControlLayout.STICK) layout.stickScale = v;
+        else layout.scale[selected] = v;
+        applyLayout();
+        invalidate();
+    }
+
+    public int getGlobalSizePercent() { return Math.round(layout.globalScale * 100); }
+
+    public void setGlobalSizePercent(int pct) {
+        layout.globalScale = pct / 100f;
+        applyLayout();
+        invalidate();
+    }
+
+    public int getOpacityPercent() { return Math.round(layout.opacity * 100); }
+
+    public void setOpacityPercent(int pct) {
+        layout.opacity = pct / 100f;
+    }
+
+    public void resetLayout() {
+        layout.reset();
+        applyLayout();
+        invalidate();
+    }
+
+    public void saveLayout() {
+        layout.save(getContext());
+    }
+
+    public String selectedLabel() {
+        if (selected < 0) return "";
+        return selected == ControlLayout.STICK ? "STICK" : btns[selected].label;
+    }
+
+    private boolean onEditTouch(MotionEvent e) {
+        float x = e.getX(), y = e.getY();
+        switch (e.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN: {
+                int hit = -1;
+                for (int i = btns.length - 1; i >= 0; i--)
+                    if (btns[i].r.contains(x, y)) { hit = i; break; }
+                if (hit < 0 && Math.hypot(x - stickRadius * 1.6f,
+                        y - (getHeight() - stickRadius * 1.6f)) <= stickRadius)
+                    hit = ControlLayout.STICK;
+                selected = hit;
+                if (hit >= 0 && hit < ControlLayout.BUTTONS) {
+                    dragDx = btns[hit].r.centerX() - x;
+                    dragDy = btns[hit].r.centerY() - y;
+                }
+                if (onSelect != null) onSelect.run();
+                invalidate();
+                break;
+            }
+            case MotionEvent.ACTION_MOVE:
+                if (selected >= 0 && selected < ControlLayout.BUTTONS && getWidth() > 0) {
+                    float cx = Math.max(0, Math.min(getWidth(), x + dragDx));
+                    float cy = Math.max(0, Math.min(getHeight(), y + dragDy));
+                    layout.x[selected] = cx / getWidth();
+                    layout.y[selected] = cy / getHeight();
+                    applyLayout();
+                    invalidate();
+                }
+                break;
+            default:
+                break;
+        }
+        return true;
     }
 
     private void place(Btn b, float cx, float cy, float rad) {
@@ -108,6 +230,17 @@ public class TouchControlsView extends View {
             }
             c.drawText(b.label, b.r.centerX(), b.r.centerY() + text.getTextSize() / 3, text);
         }
+        if (editMode) {
+            stroke.setColor(0xFFFFCC00);
+            if (selected >= 0 && selected < ControlLayout.BUTTONS) {
+                RectF r = btns[selected].r;
+                c.drawRect(r.left - 6, r.top - 6, r.right + 6, r.bottom + 6, stroke);
+            } else if (selected == ControlLayout.STICK) {
+                c.drawCircle(stickRadius * 1.6f, getHeight() - stickRadius * 1.6f,
+                        stickRadius + 6, stroke);
+            }
+            stroke.setColor(0xCCFFFFFF);
+        }
         if (stickPointer >= 0) {
             fill.setColor(0x22FFFFFF);
             c.drawCircle(stickCx, stickCy, stickRadius, fill);
@@ -124,6 +257,8 @@ public class TouchControlsView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent e) {
+        if (editMode)
+            return onEditTouch(e);
         int action = e.getActionMasked();
         int up = (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
                 ? e.getPointerId(e.getActionIndex()) : -1;

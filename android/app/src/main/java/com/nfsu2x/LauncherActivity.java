@@ -29,8 +29,9 @@ import java.nio.channels.FileChannel;
  *   - drop it into Android/data/com.nfsu2x.nfsu2/files/iso/ (or files/), or
  *   - pick it with the button (no copy is made, it is read in place).
  *
- * It is extracted into files/game/, the ISO is deleted, and the game starts.
- * Once files/game/default.xbe exists this screen just forwards to the game.
+ * It is extracted into files/game/ and the ISO is deleted. Once
+ * files/game/default.xbe exists this screen shows Start and Settings; the game
+ * only begins when Start is pressed.
  */
 public class LauncherActivity extends Activity {
 
@@ -41,7 +42,7 @@ public class LauncherActivity extends Activity {
     private File base, gameDir, isoDir;
     private TextView title, message, detail;
     private ProgressBar bar;
-    private Button pick, retry;
+    private Button pick, retry, start, settings;
     private volatile boolean busy, cancelled;
     private File waitingFor;
     private long waitingSize = -1;
@@ -82,15 +83,31 @@ public class LauncherActivity extends Activity {
             @Override public void onClick(View v) { check(); }
         });
 
+        start = new Button(this);
+        start.setText(R.string.start);
+        start.setTextSize(20);
+        start.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { launch(); }
+        });
+        settings = new Button(this);
+        settings.setText(R.string.settings);
+        settings.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(LauncherActivity.this, SettingsActivity.class));
+            }
+        });
+
         root.addView(title);
         root.addView(message);
         root.addView(bar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         root.addView(detail);
+        root.addView(start);
         root.addView(pick);
         root.addView(retry);
+        root.addView(settings);
         setContentView(root);
-        show(false, false);
+        show(false, false, false);
     }
 
     private TextView text(String s, int sp, int color) {
@@ -116,11 +133,17 @@ public class LauncherActivity extends Activity {
         ui.removeCallbacksAndMessages(null);
     }
 
-    /** Controls shown: the progress bar, or the "pick" / "retry" buttons. */
-    private void show(boolean progress, boolean error) {
+    /**
+     * Controls shown: the progress bar while extracting; once the game is
+     * installed the Start button (nothing starts by itself); otherwise the
+     * "pick" / "retry" buttons. Settings is there whenever nothing is running.
+     */
+    private void show(boolean progress, boolean error, boolean ready) {
         bar.setVisibility(progress ? View.VISIBLE : View.GONE);
-        pick.setVisibility(progress ? View.GONE : View.VISIBLE);
+        start.setVisibility(ready && !progress ? View.VISIBLE : View.GONE);
+        pick.setVisibility(progress || ready ? View.GONE : View.VISIBLE);
         retry.setVisibility(error ? View.VISIBLE : View.GONE);
+        settings.setVisibility(progress ? View.GONE : View.VISIBLE);
     }
 
     // ---- what to do now ------------------------------------------------
@@ -133,12 +156,14 @@ public class LauncherActivity extends Activity {
         }
         waitingFor = null;
         if (new File(gameDir, "default.xbe").isFile()) {
-            launch();
+            message.setText(R.string.ready);
+            detail.setText("");
+            show(false, false, true);
             return;
         }
         message.setText(getString(R.string.put_iso, isoDir.getAbsolutePath()));
         detail.setText("");
-        show(false, false);
+        show(false, false, false);
     }
 
     private File findIso() {
@@ -164,7 +189,7 @@ public class LauncherActivity extends Activity {
         waitingSize = size;
         message.setText(R.string.waiting_copy);
         detail.setText(iso.getName() + "  " + Formatter.formatFileSize(this, size));
-        show(false, false);
+        show(false, false, false);
         ui.postDelayed(new Runnable() {
             @Override public void run() { if (!busy) check(); }
         }, STABLE_MS);
@@ -193,7 +218,7 @@ public class LauncherActivity extends Activity {
         message.setText(R.string.extracting);
         detail.setText("");
         bar.setProgress(0);
-        show(true, false);
+        show(true, false, false);
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -269,18 +294,19 @@ public class LauncherActivity extends Activity {
                 if (problem != null) {
                     message.setText(problem);
                     detail.setText("");
-                    show(false, true);
+                    show(false, true, false);
                     return;
                 }
                 if (!deleted && picked)     // a picked ISO may live where we cannot delete
                     android.widget.Toast.makeText(LauncherActivity.this,
                             R.string.iso_not_deleted, android.widget.Toast.LENGTH_LONG).show();
-                launch();
+                check();            // shows Start; the game does not begin by itself
             }
         });
     }
 
     private void launch() {
+        Settings.writeEnv(this, base);      // fps / stretch / resolution for this run
         startActivity(new Intent(this, NFSU2Activity.class));
         finish();
     }
