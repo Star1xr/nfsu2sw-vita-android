@@ -80,8 +80,8 @@ jobs:
           PREFIX: ${{ github.workspace }}/ffmpeg-vp6-android
         shell: bash
         run: |
-          # The runner's NDK; the step env context does not see runner variables, the shell does.
-          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$ANDROID_SDK_ROOT/ndk/27.0.12077973}}"
+          # Force NDK 27 to match the main build
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.0.12077973"
           test -d "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" || { echo "no NDK at $ANDROID_NDK_HOME"; ls "$ANDROID_SDK_ROOT/ndk" || true; exit 1; }
           git clone --depth 1 --branch n7.1 https://github.com/FFmpeg/FFmpeg "$FFMPEG_SRC"
           bash tools/build_ffmpeg_vp6.sh android 2>&1 | tee ffmpeg.log | tail -n 40
@@ -90,11 +90,10 @@ jobs:
 
       - name: glslang (Vulkan shader compiler)
         if: steps.xbe.outputs.have == 'true'
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         shell: bash
         run: |
-          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$ANDROID_SDK_ROOT/ndk/27.0.12077973}}"
+          # Force NDK 27 to match the main build (libc++ must match)
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.0.12077973"
           test -d "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" || { echo "no NDK at $ANDROID_NDK_HOME"; ls "$ANDROID_SDK_ROOT/ndk" || true; exit 1; }
           bash android/tools/build_glslang.sh 2>&1 | tee glslang.log | tail -n 40
           ls android/deps/glslang-android/lib
