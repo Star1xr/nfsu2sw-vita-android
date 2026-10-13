@@ -34,7 +34,6 @@ endif()
 # The Vulkan renderer (xboxrecomp nv2a_vk) instead of OpenGL. On the Switch it
 # links mesa-switch's static NVK (NVK_SDK) and builds nfsu2x-vulkan.nro.
 option(NFSU2_VULKAN "Render with Vulkan instead of OpenGL" OFF)
-set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
 # ── Android: SDL2 is built in-tree; Vulkan only (OpenGL ES removed) ──
 if(ANDROID)
@@ -48,6 +47,8 @@ if(ANDROID)
     set(SDL_TEST OFF CACHE BOOL "" FORCE)
     add_subdirectory(${NFSU2_SDL2_DIR} ${CMAKE_BINARY_DIR}/SDL2)
 endif()
+
+set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
 
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 
