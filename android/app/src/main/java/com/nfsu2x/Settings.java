@@ -71,7 +71,7 @@ public final class Settings {
 
     /** OpenGL ES unless the person chose Vulkan. */
     public static String renderer(Context c) {
-        return VULKAN.equals(prefs(c).getString("renderer", GLES)) ? VULKAN : GLES;
+        return VULKAN;   // the launcher is Vulkan-only; native falls back to GL if it cannot start
     }
 
     public static void setRenderer(Context c, String r) {

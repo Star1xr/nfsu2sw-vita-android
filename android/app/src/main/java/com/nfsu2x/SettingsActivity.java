@@ -92,22 +92,6 @@ public class SettingsActivity extends Activity {
         });
         col.addView(res);
 
-        // ---- renderer ----
-        col.addView(label(getString(R.string.renderer_title), 17, FG, true));
-        col.addView(label(getString(R.string.renderer_note), 13, DIM, false));
-        RadioGroup rend = new RadioGroup(this);
-        RadioButton gles = radio(getString(R.string.renderer_gles), 0);
-        RadioButton vk = radio(getString(R.string.renderer_vulkan), 1);
-        rend.addView(gles);
-        rend.addView(vk);
-        (Settings.VULKAN.equals(Settings.renderer(this)) ? vk : gles).setChecked(true);
-        rend.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
-            @Override public void onCheckedChanged(RadioGroup g, int id) {
-                Settings.setRenderer(SettingsActivity.this, id == 1 ? Settings.VULKAN : Settings.GLES);
-            }
-        });
-        col.addView(rend);
-
         // ---- Vulkan driver ----
         col.addView(label(getString(R.string.driver_title), 17, FG, true));
         driverNote = label(getString(R.string.driver_note), 13, DIM, false);

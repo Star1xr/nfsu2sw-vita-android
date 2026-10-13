@@ -131,17 +131,13 @@ typedef struct {
  * (e.g., Dimensity 920 Mali-G68 MC4, older Vulkan 1.1 implementations).
  * Uses classic VkRenderPass + VkFramebuffer instead of dynamic rendering. */
 
-/* Forward declarations for functions defined later. */
-static int renderpass_create(VkSurf *s, VkDepthBuf *d);
-static void renderpass_ensure(VkSurf *s, VkDepthBuf *d);
-
-static VkRenderPass      s_renderpass;
-static VkFramebuffer     s_framebuffer;
-static VkImageView       s_framebuffer_color_view;
-static VkImageView       s_framebuffer_depth_view;
-static VkExtent2D        s_framebuffer_extent;
-static VkSurf           *s_framebuffer_surf;
-static VkDepthBuf       *s_framebuffer_depth;
+/* Legacy state: two fixed render passes (colour; colour + depth/stencil) and
+ * a small cache of framebuffers per (colour view, depth view). */
+static VkRenderPass s_rp[2];
+typedef struct { VkImageView cv, dv; VkFramebuffer fb; VkRenderPass rp; VkExtent2D ext; uint32_t kw, kh; } FbEnt;
+static FbEnt *fb_get(VkSurf *s, VkDepthBuf *d);
+#define VK_MAX_FB 128
+static FbEnt s_fbs[VK_MAX_FB];
 
 static PFN_vkCmdPushDescriptorSetKHR  p_push_desc;
 static PFN_vkCmdSetVertexInputEXT     p_vertex_input;
@@ -208,7 +204,7 @@ static VkDeviceMemory alloc_mem(VkMemoryRequirements rq, VkMemoryPropertyFlags w
 #define RING_BYTES (48u << 20)
 
 typedef struct {
-    VkImage image; VkImageView view; VkDeviceMemory mem; VkPipeline pipe;
+    VkImage image; VkImageView view; VkDeviceMemory mem; VkPipeline pipe; VkFramebuffer fb;
 } Garbage;
 
 typedef struct {
@@ -233,9 +229,13 @@ static uint32_t s_cb_gen;      /* bumped at every vkBeginCommandBuffer */
 static int s_dyn_valid;
 
 static void garbage_add_pipe(VkPipeline pipe);
+static void fb_invalidate(VkImageView view);
 static void garbage_add(VkImage img, VkImageView view, VkDeviceMemory mem)
 {
-    Frame *f = s_f;
+    Frame *f;
+    if (view)
+        fb_invalidate(view);                 /* framebuffers holding it die with it */
+    f = s_f;
     if (f->ngarbage == f->garbage_cap) {
         f->garbage_cap = f->garbage_cap ? f->garbage_cap * 2 : 64;
         f->garbage = (Garbage *)realloc(f->garbage, f->garbage_cap * sizeof *f->garbage);
@@ -244,6 +244,7 @@ static void garbage_add(VkImage img, VkImageView view, VkDeviceMemory mem)
     f->garbage[f->ngarbage].view = view;
     f->garbage[f->ngarbage].mem = mem;
     f->garbage[f->ngarbage].pipe = VK_NULL_HANDLE;
+    f->garbage[f->ngarbage].fb = VK_NULL_HANDLE;
     f->ngarbage++;
 }
 
@@ -251,6 +252,12 @@ static void garbage_add_pipe(VkPipeline pipe)
 {
     garbage_add(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
     s_f->garbage[s_f->ngarbage - 1].pipe = pipe;
+}
+
+static void garbage_add_fb(VkFramebuffer fb)
+{
+    garbage_add(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    s_f->garbage[s_f->ngarbage - 1].fb = fb;
 }
 
 static void garbage_free(Frame *f)
@@ -261,6 +268,7 @@ static void garbage_free(Frame *f)
         if (f->garbage[i].image) vkDestroyImage(s_dev, f->garbage[i].image, NULL);
         if (f->garbage[i].mem) vkFreeMemory(s_dev, f->garbage[i].mem, NULL);
         if (f->garbage[i].pipe) vkDestroyPipeline(s_dev, f->garbage[i].pipe, NULL);
+        if (f->garbage[i].fb) p_destroy_framebuffer(s_dev, f->garbage[i].fb, NULL);
     }
     f->ngarbage = 0;
 }
@@ -351,15 +359,10 @@ static void end_rendering(void)
 {
     if (!s_in_render)
         return;
-    if (s_dynamic_rendering) {
+    if (s_dynamic_rendering)
         p_end_rendering(s_cb);
-    } else {
-        if (s_dynamic_rendering) {
-            p_end_rendering(s_cb);
-        } else {
-            p_cmd_end_renderpass(s_cb);
-        }
-    }
+    else
+        p_cmd_end_renderpass(s_cb);
     s_in_render = 0;
 }
 
@@ -433,14 +436,13 @@ static void begin_rendering(VkSurf *s, VkDepthBuf *d)
         }
         p_begin_rendering(s_cb, &ri);
     } else {
-        renderpass_ensure(s, d);
         VkRenderPassBeginInfo rpbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        rpbi.renderPass = s_renderpass;
-        rpbi.framebuffer = s_framebuffer;
-        rpbi.renderArea.offset = (VkOffset2D){ 0, 0 };
-        rpbi.renderArea.extent = s_framebuffer_extent;
-        rpbi.clearValueCount = 0;
-        rpbi.pClearValues = NULL;
+        FbEnt *fe = fb_get(s, d);
+        if (!fe)
+            return;
+        rpbi.renderPass = fe->rp;
+        rpbi.framebuffer = fe->fb;
+        rpbi.renderArea.extent = fe->ext;
         p_cmd_begin_renderpass(s_cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
     }
     s_in_render = 1;
@@ -524,119 +526,124 @@ static int make_image(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags us
     return make_image_n(w, h, 1, fmt, usage, aspect, img, view, mem);
 }
 
-/* Create classic RenderPass and Framebuffer for legacy path. */
-static int renderpass_create(VkSurf *s, VkDepthBuf *d)
+/* Legacy path: the two fixed render passes. Attachments stay in GENERAL
+ * like everywhere else; contents are loaded and stored. */
+static int legacy_passes_create(void)
 {
-    VkAttachmentDescription att[2] = {};
-    VkAttachmentReference color_ref = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-    VkAttachmentReference depth_ref = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-    VkSubpassDescription subpass = { 0 };
-    VkRenderPassCreateInfo rpci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-    VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-    VkImageView views[2];
-    uint32_t nviews = 1;
+    int k;
+    for (k = 0; k < 2; k++) {
+        VkAttachmentDescription att[2];
+        VkAttachmentReference cref = { 0, VK_IMAGE_LAYOUT_GENERAL };
+        VkAttachmentReference dref = { 1, VK_IMAGE_LAYOUT_GENERAL };
+        VkSubpassDescription sp;
+        VkSubpassDependency dep[2];
+        VkRenderPassCreateInfo rpci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+        const VkPipelineStageFlags st = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        const VkAccessFlags ac = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    /* Color attachment */
-    att[0].format = VK_FORMAT_B8G8R8A8_UNORM;
-    att[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    att[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    att[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    att[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    att[0].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-    att[0].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    color_ref.attachment = 0;
-    color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &color_ref;
-
-    if (d) {
-        /* Depth attachment */
+        memset(att, 0, sizeof att);
+        memset(&sp, 0, sizeof sp);
+        memset(dep, 0, sizeof dep);
+        att[0].format = VK_FORMAT_B8G8R8A8_UNORM;
+        att[0].samples = VK_SAMPLE_COUNT_1_BIT;
+        att[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        att[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        att[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[0].initialLayout = att[0].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+        att[1] = att[0];
         att[1].format = s_depth_fmt;
-        att[1].samples = VK_SAMPLE_COUNT_1_BIT;
-        att[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        att[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         att[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         att[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-        att[1].initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-        att[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        depth_ref.attachment = 1;
-        depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        subpass.pDepthStencilAttachment = &depth_ref;
-        nviews = 2;
+        sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp.colorAttachmentCount = 1;
+        sp.pColorAttachments = &cref;
+        if (k)
+            sp.pDepthStencilAttachment = &dref;
+        dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dep[0].dstSubpass = 0;
+        dep[0].srcStageMask = dep[0].dstStageMask = st;
+        dep[0].srcAccessMask = ac;
+        dep[0].dstAccessMask = ac;
+        dep[1] = dep[0];
+        dep[1].srcSubpass = 0;
+        dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        rpci.attachmentCount = k ? 2 : 1;
+        rpci.pAttachments = att;
+        rpci.subpassCount = 1;
+        rpci.pSubpasses = &sp;
+        rpci.dependencyCount = 2;
+        rpci.pDependencies = dep;
+        if (p_create_renderpass(s_dev, &rpci, NULL, &s_rp[k]) != VK_SUCCESS) {
+            LOGE("vkCreateRenderPass failed\n");
+            return 0;
+        }
     }
-
-    rpci.attachmentCount = nviews;
-    rpci.pAttachments = att;
-    rpci.subpassCount = 1;
-    rpci.pSubpasses = &subpass;
-
-    VkSubpassDependency dep = {
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-        .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-    };
-    rpci.dependencyCount = 1;
-    rpci.pDependencies = &dep;
-
-    if (p_create_renderpass(s_dev, &rpci, NULL, &s_renderpass) != VK_SUCCESS)
-        return 0;
-
-    views[0] = s->view;
-    if (d) views[1] = d->view;
-
-    fci.renderPass = s_renderpass;
-    fci.attachmentCount = nviews;
-    fci.pAttachments = views;
-    fci.width = s->pw;
-    fci.height = s->ph;
-    fci.layers = 1;
-
-    if (p_create_framebuffer(s_dev, &fci, NULL, &s_framebuffer) != VK_SUCCESS) {
-        p_destroy_renderpass(s_dev, s_renderpass, NULL);
-        s_renderpass = VK_NULL_HANDLE;
-        return 0;
-    }
-
-    s_framebuffer_color_view = s->view;
-    s_framebuffer_depth_view = d ? d->view : VK_NULL_HANDLE;
-    s_framebuffer_extent.width = s->pw;
-    s_framebuffer_extent.height = s->ph;
-    s_framebuffer_surf = s;
-    s_framebuffer_depth = d;
-
     return 1;
 }
 
-/* Recreate framebuffer when surface size changes or depth buffer changes. */
-static void renderpass_ensure(VkSurf *s, VkDepthBuf *d)
+/* A surface or depth view is going away: its framebuffers go with it, once
+ * the frames that may still use them are done. */
+static void fb_invalidate(VkImageView view)
 {
-    if (s_renderpass && s_framebuffer_surf == s && s_framebuffer_depth == d &&
-        s_framebuffer_extent.width == s->pw && s_framebuffer_extent.height == s->ph)
+    int i;
+    if (s_dynamic_rendering)
         return;
+    for (i = 0; i < VK_MAX_FB; i++)
+        if (s_fbs[i].fb && (s_fbs[i].cv == view || s_fbs[i].dv == view)) {
+            garbage_add_fb(s_fbs[i].fb);
+            memset(&s_fbs[i], 0, sizeof s_fbs[i]);
+        }
+}
 
-    if (s_framebuffer) {
-        p_destroy_framebuffer(s_dev, s_framebuffer, NULL);
-        s_framebuffer = VK_NULL_HANDLE;
-    }
-    if (s_renderpass) {
-        p_destroy_renderpass(s_dev, s_renderpass, NULL);
-        s_renderpass = VK_NULL_HANDLE;
-    }
+/* The framebuffer for a colour surface and optional depth buffer. */
+static FbEnt *fb_get(VkSurf *s, VkDepthBuf *d)
+{
+    static uint32_t next;
+    VkImageView dv = d ? d->view : VK_NULL_HANDLE;
+    VkImageView views[2];
+    VkFramebufferCreateInfo fci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    FbEnt *fe;
+    int i;
 
-    renderpass_create(s, d);
+    for (i = 0; i < VK_MAX_FB; i++)
+        if (s_fbs[i].fb && s_fbs[i].cv == s->view && s_fbs[i].dv == dv &&
+            s_fbs[i].kw == s->pw && s_fbs[i].kh == s->ph)
+            return &s_fbs[i];
+    for (i = 0; i < VK_MAX_FB && s_fbs[i].fb; i++) { }
+    if (i == VK_MAX_FB) {                       /* full: recycle round-robin */
+        i = (int)(next++ % VK_MAX_FB);
+        garbage_add_fb(s_fbs[i].fb);
+        memset(&s_fbs[i], 0, sizeof s_fbs[i]);
+    }
+    fe = &s_fbs[i];
+    views[0] = s->view;
+    views[1] = dv;
+    fe->rp = s_rp[d ? 1 : 0];
+    fe->ext.width = s->pw;
+    fe->ext.height = s->ph;
+    if (d) {
+        if (d->pw < fe->ext.width) fe->ext.width = d->pw;
+        if (d->ph < fe->ext.height) fe->ext.height = d->ph;
+    }
+    fci.renderPass = fe->rp;
+    fci.attachmentCount = d ? 2 : 1;
+    fci.pAttachments = views;
+    fci.width = fe->ext.width;
+    fci.height = fe->ext.height;
+    fci.layers = 1;
+    if (p_create_framebuffer(s_dev, &fci, NULL, &fe->fb) != VK_SUCCESS) {
+        LOGE("vkCreateFramebuffer failed\n");
+        memset(fe, 0, sizeof *fe);
+        return NULL;
+    }
+    fe->cv = s->view;
+    fe->dv = dv;
+    fe->kw = s->pw;
+    fe->kh = s->ph;
+    return fe;
 }
 
 /* ── Surfaces ─────────────────────────────────────────────────────── */
@@ -1713,6 +1720,11 @@ static VkProg *prog_get(const Nv2aRawBatch *b, const Nv2aPshKey *pk)
 typedef struct {
     int      prog;
     uint32_t blend, bsrc, bdst, beq, cmask, depth, topo;
+    /* Legacy path only (no dynamic state): what is baked into the pipeline.
+     * All zero when dynamic rendering is in use. */
+    uint32_t ptopo, cull, front, dtest, dwrite, dop;
+    uint32_t stest, sfail, szfail, spass, sop;
+    uint32_t vin[NV2A_RAW_ATTRS];                  /* format << 16 | stride */
 } PipeKey;
 
 typedef struct {
@@ -1795,7 +1807,7 @@ static void pipe_rec_append(const PipeKey *k)
     char path[256];
     PipeRec rec;
     FILE *f;
-    if (s_prewarming || !cache_path(path, sizeof path, "vkpipes.bin"))
+    if (s_prewarming || !s_dynamic_rendering || !cache_path(path, sizeof path, "vkpipes.bin"))
         return;
     memset(&rec, 0, sizeof rec);
     rec.magic = PIPE_REC_MAGIC;
@@ -1837,6 +1849,8 @@ static VkPipeline pipe_get(const PipeKey *k)
         VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
         VK_DYNAMIC_STATE_STENCIL_OP, VK_DYNAMIC_STATE_VERTEX_INPUT_EXT,
     };
+    VkVertexInputBindingDescription vib[NV2A_RAW_ATTRS];
+    VkVertexInputAttributeDescription via[NV2A_RAW_ATTRS];
     VkPipeline pipe = VK_NULL_HANDLE;
     VkProg *p = &s_prog[k->prog];
 
@@ -1872,7 +1886,8 @@ static VkPipeline pipe_get(const PipeKey *k)
     ba.colorWriteMask = k->cmask;
     cb.attachmentCount = 1;
     cb.pAttachments = &ba;
-    dy.dynamicStateCount = (uint32_t)(sizeof dyn / sizeof dyn[0]);
+    /* The first six are core 1.0; the rest need extended dynamic state. */
+    dy.dynamicStateCount = s_dynamic_rendering ? (uint32_t)(sizeof dyn / sizeof dyn[0]) : 6;
     dy.pDynamicStates = dyn;
 
     if (s_dynamic_rendering) {
@@ -1884,7 +1899,35 @@ static VkPipeline pipe_get(const PipeKey *k)
         }
         ci.pNext = &rci;
     } else {
-        ci.pNext = NULL;  /* No dynamic rendering info for legacy path */
+        /* Classic render pass, everything else static in the pipeline. */
+        uint32_t a;
+        for (a = 0; a < NV2A_RAW_ATTRS; a++) {
+            vib[a].binding = a;
+            vib[a].stride = k->vin[a] & 0xFFFF;
+            vib[a].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            via[a].location = a;
+            via[a].binding = a;
+            via[a].format = (VkFormat)(k->vin[a] >> 16);
+            via[a].offset = 0;
+        }
+        vi.vertexBindingDescriptionCount = NV2A_RAW_ATTRS;
+        vi.pVertexBindingDescriptions = vib;
+        vi.vertexAttributeDescriptionCount = NV2A_RAW_ATTRS;
+        vi.pVertexAttributeDescriptions = via;
+        ia.topology = (VkPrimitiveTopology)k->ptopo;
+        rs.cullMode = (VkCullModeFlags)k->cull;
+        rs.frontFace = (VkFrontFace)k->front;
+        ds.depthTestEnable = k->dtest ? VK_TRUE : VK_FALSE;
+        ds.depthWriteEnable = k->dwrite ? VK_TRUE : VK_FALSE;
+        ds.depthCompareOp = (VkCompareOp)k->dop;
+        ds.stencilTestEnable = k->stest ? VK_TRUE : VK_FALSE;
+        ds.front.failOp = ds.back.failOp = (VkStencilOp)k->sfail;
+        ds.front.passOp = ds.back.passOp = (VkStencilOp)k->spass;
+        ds.front.depthFailOp = ds.back.depthFailOp = (VkStencilOp)k->szfail;
+        ds.front.compareOp = ds.back.compareOp = (VkCompareOp)k->sop;
+        ci.renderPass = s_rp[k->depth ? 1 : 0];
+        ci.subpass = 0;
+        ci.pNext = NULL;
     }
 
     ci.stageCount = 2;
@@ -1994,7 +2037,7 @@ static void prewarm(void)
         }
         fclose(f);
     }
-    if (cache_path(path, sizeof path, "vkpipes.bin") && (f = fopen(path, "rb"))) {
+    if (s_dynamic_rendering && cache_path(path, sizeof path, "vkpipes.bin") && (f = fopen(path, "rb"))) {
         while (fread(&pr, sizeof pr, 1, f) == 1) {
             VkProg *p;
             PipeKey k;
@@ -2091,6 +2134,7 @@ NV2A_VK_GLOBAL_FUNCS(X)
 NV2A_VK_INSTANCE_FUNCS(X)
 #undef X
 static PFN_vkGetInstanceProcAddr s_gipa;
+#define NV2A_GIPA(i, n) s_gipa(i, n)
 
 /* Open the Vulkan loader: the one a Turnip driver package is hooked into
  * when RECOMP_VK_DRIVER_DIR / _NAME name one (and libadrenotools is built
@@ -2136,10 +2180,25 @@ static int vk_dyn_open(void)
  * the instance's dispatch, which is valid and costs one extra jump). */
 static void vk_dyn_load(VkInstance inst)
 {
-#define X(n) p_##n = (PFN_##n)s_gipa(inst, #n); if (!p_##n) LOGE("missing %s\n", #n);
+    /* Entry points only Vulkan 1.3 devices have: absent is normal on a 1.1
+     * device (the classic render pass path does not call them). */
+    static const char *const opt[] = {
+        "vkCmdBeginRendering", "vkCmdEndRendering", "vkCmdSetCullMode",
+        "vkCmdSetDepthCompareOp", "vkCmdSetDepthTestEnable", "vkCmdSetDepthWriteEnable",
+        "vkCmdSetFrontFace", "vkCmdSetPrimitiveTopology", "vkCmdSetStencilOp",
+        "vkCmdSetStencilTestEnable", "vkCmdSetVertexInputEXT",
+    };
+    unsigned o;
+#define X(n) p_##n = (PFN_##n)s_gipa(inst, #n); \
+    if (!p_##n) { \
+        for (o = 0; o < sizeof opt / sizeof opt[0] && strcmp(opt[o], #n); o++) { } \
+        if (o == sizeof opt / sizeof opt[0]) LOGE("missing %s\n", #n); \
+    }
     NV2A_VK_INSTANCE_FUNCS(X)
 #undef X
 }
+#else
+#define NV2A_GIPA(i, n) vkGetInstanceProcAddr(i, n)
 #endif
 
 #if !defined(__SWITCH__)
@@ -2346,34 +2405,36 @@ static int ready(void)
         return 0;
     }
 
-    /* Check for dynamic rendering support - use the already-declared f2, f13, fvi, feds */
+    /* Dynamic rendering, extended dynamic state and dynamic vertex input
+     * are used when all three are there (Vulkan 1.3 devices); otherwise the
+     * classic render pass path with static pipeline state. vkGetPhysical-
+     * DeviceFeatures2 is an instance function, fetched here (never through
+     * the device: that would give NULL). */
     f13.pNext = &fvi;
     fvi.pNext = &feds;
     f2.pNext = &f13;
-
-    p_get_physical_device_features2(s_pd, &f2);
-
-    s_dynamic_rendering = f13.dynamicRendering == VK_TRUE &&
-                          fvi.vertexInputDynamicState == VK_TRUE &&
-                          feds.extendedDynamicState == VK_TRUE;
-
-    /* Also require Vulkan 1.3 API version for dynamic rendering.
-     * Some drivers (e.g. Adreno 650 on Android) report 1.1 but claim
-     * to support dynamic rendering features they don't actually have.
-     * Use VK_MAKE_API_VERSION for proper comparison with pp.apiVersion. */
-    if (pp.apiVersion < VK_MAKE_API_VERSION(0, 1, 3, 0)) {
-        s_dynamic_rendering = 0;
-        LOGE("Vulkan API version < 1.3, forcing legacy RenderPass path\n");
+    s_dynamic_rendering = 0;
+    if (pp.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0)) {
+        p_get_physical_device_features2 =
+            (PFN_vkGetPhysicalDeviceFeatures2)NV2A_GIPA(s_inst, "vkGetPhysicalDeviceFeatures2");
+        if (p_get_physical_device_features2) {
+            p_get_physical_device_features2(s_pd, &f2);
+            s_dynamic_rendering = f13.dynamicRendering == VK_TRUE &&
+                                  fvi.vertexInputDynamicState == VK_TRUE &&
+                                  feds.extendedDynamicState == VK_TRUE;
+        }
     }
 
-    if (!s_dynamic_rendering) {
-        LOGE("dynamic rendering not supported, using legacy RenderPass path\n");
-    }
+    if (!s_dynamic_rendering)
+        fprintf(stderr, "  [VK] no dynamic rendering / extended dynamic state (Vulkan < 1.3 or "
+                        "missing features): classic render pass path\n");
 
-    /* Enable features only if supported */
+    /* Enable only what is there; the legacy path asks for plain 1.0. */
     f13.dynamicRendering = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
     fvi.vertexInputDynamicState = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
     feds.extendedDynamicState = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
+    if (!s_dynamic_rendering)
+        f2.pNext = NULL;
 #if defined(__SWITCH__)
     {
         NWindow *win = nwindowGetDefault();
@@ -2422,24 +2483,25 @@ static int ready(void)
         GET(p_vertex_input, "vkCmdSetVertexInputEXT");
         GET(p_begin_rendering, "vkCmdBeginRendering");
         GET(p_end_rendering, "vkCmdEndRendering");
+        GET(p_cull_mode, "vkCmdSetCullMode");
+        GET(p_front_face, "vkCmdSetFrontFace");
+        GET(p_topology, "vkCmdSetPrimitiveTopology");
+        GET(p_depth_test, "vkCmdSetDepthTestEnable");
+        GET(p_depth_write, "vkCmdSetDepthWriteEnable");
+        GET(p_depth_op, "vkCmdSetDepthCompareOp");
+        GET(p_stencil_test, "vkCmdSetStencilTestEnable");
+        GET(p_stencil_op, "vkCmdSetStencilOp");
     }
-    /* Legacy RenderPass functions (always loaded for fallback path). */
+    /* Classic render pass functions (1.0 core, used by the legacy path). */
     GET(p_cmd_begin_renderpass, "vkCmdBeginRenderPass");
     GET(p_cmd_end_renderpass, "vkCmdEndRenderPass");
     GET(p_create_renderpass, "vkCreateRenderPass");
     GET(p_create_framebuffer, "vkCreateFramebuffer");
     GET(p_destroy_renderpass, "vkDestroyRenderPass");
     GET(p_destroy_framebuffer, "vkDestroyFramebuffer");
-    GET(p_get_physical_device_features2, "vkGetPhysicalDeviceFeatures2");
-    GET(p_cull_mode, "vkCmdSetCullMode");
-    GET(p_front_face, "vkCmdSetFrontFace");
-    GET(p_topology, "vkCmdSetPrimitiveTopology");
-    GET(p_depth_test, "vkCmdSetDepthTestEnable");
-    GET(p_depth_write, "vkCmdSetDepthWriteEnable");
-    GET(p_depth_op, "vkCmdSetDepthCompareOp");
-    GET(p_stencil_test, "vkCmdSetStencilTestEnable");
-    GET(p_stencil_op, "vkCmdSetStencilOp");
 #undef GET
+    if (!s_dynamic_rendering && !legacy_passes_create())
+        return 0;
 
     if (!s_headless && !create_swapchain()) {
         LOGE("swapchain creation failed; running headless\n");
@@ -2600,7 +2662,7 @@ typedef struct {
 } DynState;
 static DynState s_dyn;
 
-static void apply_dynamic(const uint32_t *r, int has_depth, VkPrimitiveTopology topo)
+static void dyn_collect(const uint32_t *r, int has_depth, VkPrimitiveTopology topo, DynState *out)
 {
     DynState d;
     memset(&d, 0, sizeof d);
@@ -2618,31 +2680,100 @@ static void apply_dynamic(const uint32_t *r, int has_depth, VkPrimitiveTopology 
         d.sref = r[0x368 / 4] & 0xFF;
     }
     d.bcolor = r[0x34C / 4];
+    *out = d;
+}
+
+static VkCullModeFlags cull_of(const DynState *d)
+{
+    if (!d->cull)
+        return VK_CULL_MODE_NONE;
+    return d->cullmode == 0x404 ? VK_CULL_MODE_FRONT_BIT
+         : d->cullmode == 0x408 ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_BACK_BIT;
+}
+
+/* NV2A winding is as seen on screen, rows top-first -- Vulkan's
+ * framebuffer orientation, so CW is CW. nv2a_gl swaps because its
+ * window y runs the other way. Swapped here too, every culled draw
+ * (29 a frame in the main menu: headlight glass, grille) lost its
+ * front faces and kept its back ones. */
+static VkFrontFace front_of(const DynState *d)
+{
+    return d->front == 0x901 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+}
+
+static VkFormat vertex_format(uint32_t type, uint32_t size);
+
+/* The vertex layout of a batch as the pipeline sees it (format << 16 | stride
+ * per attribute); the same decisions upload_vertices makes. */
+static void vertex_layout(const Nv2aRawBatch *b, uint32_t vin[NV2A_RAW_ATTRS])
+{
+    VkFormat fmt[NV2A_RAW_ATTRS];
+    uint16_t direct = 0, conv;
+    uint32_t a, np = 0;
+
+    for (a = 0; a < NV2A_RAW_ATTRS; a++) {
+        fmt[a] = VK_FORMAT_UNDEFINED;
+        if ((b->attr_direct & (1u << a)) &&
+            (fmt[a] = vertex_format(b->direct[a].type, b->direct[a].size)) != VK_FORMAT_UNDEFINED)
+            direct |= (uint16_t)(1u << a);
+    }
+    conv = b->attr_present & (uint16_t)~direct;
+    for (a = 0; a < NV2A_RAW_ATTRS; a++)
+        if (conv & (1u << a))
+            np++;
+    for (a = 0; a < NV2A_RAW_ATTRS; a++) {
+        if (direct & (1u << a))
+            vin[a] = ((uint32_t)fmt[a] << 16) | (b->direct[a].stride & 0xFFFF);
+        else if (conv & (1u << a))
+            vin[a] = ((uint32_t)VK_FORMAT_R32G32B32A32_SFLOAT << 16) | (np * 16);
+        else
+            vin[a] = (uint32_t)VK_FORMAT_R32G32B32A32_SFLOAT << 16;     /* stride 0 */
+    }
+}
+
+/* Legacy path: what dynamic state would have been, baked into the pipe key. */
+static void legacy_key(const uint32_t *r, int has_depth, VkPrimitiveTopology topo,
+                       const Nv2aRawBatch *b, PipeKey *k)
+{
+    DynState d;
+    dyn_collect(r, has_depth, topo, &d);
+    k->ptopo = (uint32_t)topo;
+    k->cull = (uint32_t)cull_of(&d);
+    k->front = (uint32_t)front_of(&d);
+    k->dtest = d.dtest;
+    k->dwrite = d.dwrite;
+    k->dop = (uint32_t)cmp_op(d.dop, 0x203);
+    k->stest = d.stest;
+    k->sfail = (uint32_t)stencil_op(d.sfail);
+    k->szfail = (uint32_t)stencil_op(d.szfail);
+    k->spass = (uint32_t)stencil_op(d.spass);
+    k->sop = (uint32_t)cmp_op(d.sop, 0x207);
+    vertex_layout(b, k->vin);
+}
+
+static void apply_dynamic(const uint32_t *r, int has_depth, VkPrimitiveTopology topo)
+{
+    DynState d;
+    dyn_collect(r, has_depth, topo, &d);
     if (s_dyn_valid && !memcmp(&d, &s_dyn, sizeof d))
         return;
-    if (!s_dyn_valid || d.cull != s_dyn.cull || d.cullmode != s_dyn.cullmode) {
-        VkCullModeFlags cm = VK_CULL_MODE_NONE;
-        if (d.cull)
-            cm = d.cullmode == 0x404 ? VK_CULL_MODE_FRONT_BIT
-               : d.cullmode == 0x408 ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_BACK_BIT;
-        p_cull_mode(s_cb, cm);
+    if (s_dynamic_rendering) {
+        if (!s_dyn_valid || d.cull != s_dyn.cull || d.cullmode != s_dyn.cullmode)
+            p_cull_mode(s_cb, cull_of(&d));
+        if (!s_dyn_valid || d.front != s_dyn.front)
+            p_front_face(s_cb, front_of(&d));
+        if (!s_dyn_valid || d.topo != s_dyn.topo)
+            p_topology(s_cb, topo);
+        if (!s_dyn_valid || d.dtest != s_dyn.dtest) p_depth_test(s_cb, d.dtest);
+        if (!s_dyn_valid || d.dwrite != s_dyn.dwrite) p_depth_write(s_cb, d.dwrite);
+        if (!s_dyn_valid || d.dop != s_dyn.dop) p_depth_op(s_cb, cmp_op(d.dop, 0x203));
+        if (!s_dyn_valid || d.stest != s_dyn.stest) p_stencil_test(s_cb, d.stest);
+        if (!s_dyn_valid || memcmp(&d.sfail, &s_dyn.sfail, 7 * sizeof(uint32_t)))
+            p_stencil_op(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_op(d.sfail), stencil_op(d.spass),
+                         stencil_op(d.szfail), cmp_op(d.sop, 0x207));
     }
-    if (!s_dyn_valid || d.front != s_dyn.front)
-        /* NV2A winding is as seen on screen, rows top-first -- Vulkan's
-         * framebuffer orientation, so CW is CW. nv2a_gl swaps because its
-         * window y runs the other way. Swapped here too, every culled draw
-         * (29 a frame in the main menu: headlight glass, grille) lost its
-         * front faces and kept its back ones. */
-        p_front_face(s_cb, d.front == 0x901 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE);
-    if (!s_dyn_valid || d.topo != s_dyn.topo)
-        p_topology(s_cb, topo);
-    if (!s_dyn_valid || d.dtest != s_dyn.dtest) p_depth_test(s_cb, d.dtest);
-    if (!s_dyn_valid || d.dwrite != s_dyn.dwrite) p_depth_write(s_cb, d.dwrite);
-    if (!s_dyn_valid || d.dop != s_dyn.dop) p_depth_op(s_cb, cmp_op(d.dop, 0x203));
-    if (!s_dyn_valid || d.stest != s_dyn.stest) p_stencil_test(s_cb, d.stest);
-    if (!s_dyn_valid || memcmp(&d.sfail, &s_dyn.sfail, 7 * sizeof(uint32_t))) {
-        p_stencil_op(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, stencil_op(d.sfail), stencil_op(d.spass),
-                     stencil_op(d.szfail), cmp_op(d.sop, 0x207));
+    /* Stencil masks/reference and blend constants are dynamic on both paths. */
+    if (!s_dyn_valid || memcmp(&d.smask, &s_dyn.smask, 3 * sizeof(uint32_t))) {
         vkCmdSetStencilCompareMask(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, d.smask);
         vkCmdSetStencilWriteMask(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, d.swrite);
         vkCmdSetStencilReference(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, d.sref);
@@ -2943,7 +3074,8 @@ static int upload_vertices(const Nv2aRawBatch *b)
             offs[a] = at + const_at + a * 16;
         }
     }
-    p_vertex_input(s_cb, NV2A_RAW_ATTRS, bind, NV2A_RAW_ATTRS, attr);
+    if (s_dynamic_rendering)
+        p_vertex_input(s_cb, NV2A_RAW_ATTRS, bind, NV2A_RAW_ATTRS, attr);
     vkCmdBindVertexBuffers(s_cb, 0, NV2A_RAW_ATTRS, bufs, offs);
     return 1;
 }
@@ -3241,6 +3373,8 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     key.depth = d != NULL;
     key.topo = cls;
+    if (!s_dynamic_rendering)
+        legacy_key(r, d != NULL, topo, b, &key);
     pipe = pipe_get(&key);
     if (!pipe)
         return;
