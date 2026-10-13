@@ -5,11 +5,29 @@ project(nv2a_vk C)
 # the Switch's NVK from mesa-switch, linked statically (NVK_SDK), or any
 # Vulkan driver on Linux. Shares the shader generators with nv2a_gl, in
 # their Vulkan dialect, and compiles them with glslang at run time.
-add_library(xbox_nv2a_vk STATIC
-    nv2a_vk.c
-    ../nv2a_gl/gl_vsh.c
-    ../nv2a_gl/gl_psh.c
-)
+if(ANDROID)
+    # Built next to nv2a_gl in one library: the shader generators live there
+    # (one copy), and the few names both renderers define are renamed here.
+    add_library(xbox_nv2a_vk STATIC nv2a_vk.c)
+    target_link_libraries(xbox_nv2a_vk PUBLIC xbox_nv2a_gl)
+    target_compile_definitions(xbox_nv2a_vk PRIVATE
+        nv2a_gl_texture_bytes=nv2a_vk_texture_bytes
+        nv2a_gl_frame_count=nv2a_vk_frame_count
+        nv2a_gl_program_count=nv2a_vk_program_count
+        nv2a_gl_queue_stats=nv2a_vk_queue_stats)
+    # libadrenotools (a custom Turnip driver from a .zip), when the top-level
+    # project added it (android/tools/fetch_deps.sh).
+    if(TARGET adrenotools)
+        target_link_libraries(xbox_nv2a_vk PUBLIC adrenotools)
+        target_compile_definitions(xbox_nv2a_vk PRIVATE NFSU2_ADRENOTOOLS=1)
+    endif()
+else()
+    add_library(xbox_nv2a_vk STATIC
+        nv2a_vk.c
+        ../nv2a_gl/gl_vsh.c
+        ../nv2a_gl/gl_psh.c
+    )
+endif()
 target_include_directories(xbox_nv2a_vk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(glslang CONFIG REQUIRED)

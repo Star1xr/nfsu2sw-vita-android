@@ -9,7 +9,8 @@ plan** and has no code.
 
 The Android build is the Linux host (SDL2) packaged as an APK.
 
-1. A launcher screen finds the game ISO and extracts it, then deletes the ISO.
+1. A launcher screen finds the game ISO and extracts it, then deletes the ISO. Once the game is
+   installed it shows **Start** (nothing starts by itself) and **Settings**.
 2. SDL's `SDLActivity` loads `libmain.so`. That library is this project: the lifted C, the
    vendored xboxrecomp runtime and `src/android_host.c`.
 3. The renderer is **Vulkan 1.1+** (OpenGL ES has been removed). The Vulkan renderer uses
@@ -30,16 +31,12 @@ The Android build is the Linux host (SDL2) packaged as an APK.
 
 ### Locally
 
-```sh
-export ANDROID_NDK_HOME=/path/to/ndk
-android/tools/fetch_deps.sh                 # SDL2 sources -> android/deps/SDL
-# Optional, for the movies (otherwise the slow lifted VP6 decoder plays them):
-tools/build_ffmpeg_vp6.sh android           # PREFIX=android/deps/ffmpeg-vp6-android
+SDL2 release-2.30.9 in /data/data/com.termux/files/home/nfsu2privaterepo/android/deps/SDL
+Submodule path 'lib/linkernsbypass': checked out 'aa3975893d83ef1bc84c321ec60c65fbf1287887'
+libadrenotools in /data/data/com.termux/files/home/nfsu2privaterepo/android/deps/libadrenotools
 
-cd android
-./gradlew assembleRelease -Pnfsu2.genDir=/path/to/gen
-adb install -r app/build/outputs/apk/release/app-release.apk   # signed with the debug key
-```
+Run `android/tools/build_glslang.sh` once; Gradle then builds it in automatically.
+`fetch_deps.sh` also fetches libadrenotools, which lets the Vulkan renderer load a custom driver.
 
 CMake switches worth knowing (add them to `arguments` in `app/build.gradle`):
 
@@ -62,9 +59,7 @@ lifted C is derived from it. The tail of each build log is pushed to a `ci-logs`
 On first start the app creates `Android/data/com.nfsu2x.nfsu2/files/iso/` and shows its path.
 Put the ISO there:
 
-```sh
-android/tools/push_game.sh /path/to/game.iso    # adb; Android 11 and newer hide Android/data from file managers
-```
+
 
 Or tap **Choose ISO file** and pick it anywhere (it is read in place, without copying). The app
 then:
@@ -80,15 +75,7 @@ The reader handles trimmed XISOs and raw dumps (partition offsets 0, `0x18300000
 offsets (`tools/XisoSelfTest.java`), not on a real disc yet. An already extracted disc can be
 pushed to `files/game/` instead.
 
-```
-files/
-  iso/               drop the ISO here (directly in files/ also works)
-  game/              the extracted disc: default.xbe, NFSUNDER/, ... and the UDATA/ saves
-  save/              runtime saves
-  nfsu2x_env.txt     optional KEY=VALUE settings, the same keys as the main README
-  nfsu2x_log.txt     log of the last run (also in logcat, tag "nfsu2")
-  progcache.bin ...  shader caches
-```
+
 
 ## Controls
 
@@ -98,6 +85,24 @@ files/
   (Black/White), Back and Start. Landscape only.
 - Buttons map by label, like the Switch build (`RECOMP_PAD_LAYOUT=position` for the Xbox
   layout). There is no second player on touch.
+
+## Launcher settings
+
+Settings are saved on the device and written to `files/launcher_env.txt` when Start is pressed
+(the game reads it before your own `nfsu2x_env.txt`, which therefore wins).
+
+| Setting | What it does | Environment variable |
+|---|---|---|
+| Frame rate 30 / 60 / 120 | NFSU2 flips every second vblank in a race, so the display rate the game sees is raised to 2x the target. 60 and 120 are experimental: the game's clock is time based, but this is not verified, and the phone has to keep up. | `RECOMP_VBLANK_HZ` |
+| Stretch to full screen | Fills the whole screen and ignores the aspect ratio. Off by default. | `RECOMP_STRETCH=1` |
+| Resolution | 0.5x to 3x of 640 x 480. | `RECOMP_GL_SCALE` |
+| Vulkan driver | The system driver, or a Turnip package (.zip) added with "Add driver". Press and hold a driver to remove it. | `RECOMP_VK_DRIVER_DIR`, `_NAME`, `_HOOK_DIR`, `_TMP_DIR` |
+| Edit controls | Drag the touch buttons, per-button size, size of all, opacity. | (stored in the app) |
+
+Custom drivers use [libadrenotools](https://github.com/bylaws/libadrenotools): the package is the
+usual "adrenotools" zip (a `meta.json` with `libraryName`, and the driver `.so`), unpacked into
+the app's private storage. It only works on Adreno GPUs, needs the native libraries extracted at
+install (the APK is packaged that way) and is untested on devices so far.
 
 ## OpenGL ES port (removed)
 

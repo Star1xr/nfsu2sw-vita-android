@@ -11,6 +11,7 @@ def depsDir      = file("${rootDir}/deps")
 def sdlDir       = file("${depsDir}/SDL")
 def glslangDir   = findProperty('nfsu2.glslangDir') ?: "${depsDir}/glslang-android"
 def ffmpegDir    = findProperty('nfsu2.ffmpegDir') ?: "${depsDir}/ffmpeg-vp6-android"
+def adrenoDir    = findProperty('nfsu2.adrenotoolsDir') ?: "${depsDir}/libadrenotools"
 // Vulkan only on Android (OpenGL ES removed). -Pnfsu2.vulkan=false is ignored.
 def useVulkan    = true
 if (!sdlDir.exists()) {
@@ -39,6 +40,7 @@ android {
                           "-DNFSU2_SDL2_DIR=${sdlDir}",
                           "-DCMAKE_PREFIX_PATH=${glslangDir}",
                           "-DCMAKE_FIND_ROOT_PATH=${glslangDir}",
+                          "-DNFSU2_ADRENOTOOLS_DIR=${file(adrenoDir).exists() ? adrenoDir : ''}",
                           "-DNFSU2_FFMPEG_DIR=${file(ffmpegDir).exists() ? ffmpegDir : ''}"
             }
         }
@@ -66,8 +68,9 @@ android {
 
     packaging {
         jniLibs {
-            // libmain.so is ~100 MB: keep it page-aligned in the APK and mapped from it
-            useLegacyPackaging = false
+            // libadrenotools (custom Turnip drivers) needs its hook libraries as real
+            // files in nativeLibraryDir, so the libraries are extracted at install.
+            useLegacyPackaging = true
         }
     }
 

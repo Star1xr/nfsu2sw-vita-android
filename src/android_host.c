@@ -99,12 +99,12 @@ static void log_init(void)
 
 /* ── nfsu2x_env.txt ──────────────────────────────────────────────── */
 
-static void load_env(void)
+static void load_env_file(const char *name)
 {
     char path[700], line[1024];
     FILE *f;
 
-    snprintf(path, sizeof path, "%s/nfsu2x_env.txt", s_base);
+    snprintf(path, sizeof path, "%s/%s", s_base, name);
     f = fopen(path, "r");
     if (!f)
         return;
@@ -119,6 +119,14 @@ static void load_env(void)
         printf("[android] env %s=%s\n", line, eq + 1);
     }
     fclose(f);
+}
+
+/* launcher_env.txt is written by the launcher's settings screen; the person's
+ * own nfsu2x_env.txt is read after it and wins. */
+static void load_env(void)
+{
+    load_env_file("launcher_env.txt");
+    load_env_file("nfsu2x_env.txt");
 }
 
 void android_boot(void)

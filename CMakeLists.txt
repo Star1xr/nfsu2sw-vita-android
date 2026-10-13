@@ -32,7 +32,8 @@ if(NOT EXISTS "${NFSU2_GEN_DIR}/recomp_funcs.h")
 endif()
 
 # The Vulkan renderer (xboxrecomp nv2a_vk) instead of OpenGL. On the Switch it
-# links mesa-switch's static NVK (NVK_SDK) and builds nfsu2x-vulkan.nro.
+# links mesa-switch's static NVK (NVK_SDK) and builds nfsu2x-vulkan.nro. On
+# Android it is built in addition to OpenGL ES and chosen at run time.
 option(NFSU2_VULKAN "Render with Vulkan instead of OpenGL" OFF)
 
 # ── Android: SDL2 is built in-tree; Vulkan only (OpenGL ES removed) ──
@@ -49,6 +50,16 @@ if(ANDROID)
 endif()
 
 set(XBOXRECOMP_VULKAN ${NFSU2_VULKAN} CACHE BOOL "" FORCE)
+
+# libadrenotools: loads a custom Vulkan driver (Turnip .zip) for the Vulkan
+# renderer. Its hook libraries are shared libraries of this project, so they
+# end up in the APK (which must then be packaged with useLegacyPackaging).
+if(ANDROID)
+    set(NFSU2_ADRENOTOOLS_DIR "" CACHE PATH "libadrenotools source tree (android/tools/fetch_deps.sh)")
+    if(NFSU2_ADRENOTOOLS_DIR AND EXISTS "${NFSU2_ADRENOTOOLS_DIR}/CMakeLists.txt")
+        add_subdirectory(${NFSU2_ADRENOTOOLS_DIR} ${CMAKE_BINARY_DIR}/adrenotools)
+    endif()
+endif()
 
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 
@@ -94,6 +105,15 @@ endif()
 
 if(NFSU2_VULKAN)
     target_compile_definitions(${PROJECT_NAME} PRIVATE NFSU2_VULKAN=1)
+endif()
+if(ANDROID AND TARGET adrenotools)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE NFSU2_ADRENOTOOLS=1)
+endif()
+if(ANDROID AND (NFSU2_VULKAN OR TARGET adrenotools))
+    # glslang and libadrenotools are C++: link with the C++ driver so libc++
+    # (static, ANDROID_STL=c++_static) comes along.
+    enable_language(CXX)
+    set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
