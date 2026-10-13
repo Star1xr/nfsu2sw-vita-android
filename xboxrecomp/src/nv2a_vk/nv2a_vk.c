@@ -100,6 +100,15 @@ static int              s_have_bc, s_have_depth_clamp, s_dynamic_rendering;
 /* Legacy RenderPass fallback for devices without VK_KHR_dynamic_rendering
  * (e.g., Dimensity 920 Mali-G68 MC4, older Vulkan 1.1 implementations).
  * Uses classic VkRenderPass + VkFramebuffer instead of dynamic rendering. */
+
+/* Forward declarations for types defined later. */
+typedef struct VkSurf      VkSurf;
+typedef struct VkDepthBuf  VkDepthBuf;
+
+/* Forward declarations for functions defined later. */
+static int renderpass_create(VkSurf *s, VkDepthBuf *d);
+static void renderpass_ensure(VkSurf *s, VkDepthBuf *d);
+
 static VkRenderPass      s_renderpass;
 static VkFramebuffer     s_framebuffer;
 static VkImageView       s_framebuffer_color_view;
@@ -2239,6 +2248,7 @@ static int ready(void)
     f13.dynamicRendering = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
     fvi.vertexInputDynamicState = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
     feds.extendedDynamicState = s_dynamic_rendering ? VK_TRUE : VK_FALSE;
+#if defined(__SWITCH__)
     {
         NWindow *win = nwindowGetDefault();
         VkViSurfaceCreateInfoNN sci = { VK_STRUCTURE_TYPE_VI_SURFACE_CREATE_INFO_NN };
