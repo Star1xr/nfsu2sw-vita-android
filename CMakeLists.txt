@@ -108,6 +108,12 @@ endif()
 if(ANDROID AND TARGET adrenotools)
     target_compile_definitions(${PROJECT_NAME} PRIVATE NFSU2_ADRENOTOOLS=1)
 endif()
+if(ANDROID AND (NFSU2_VULKAN OR TARGET adrenotools))
+    # glslang and libadrenotools are C++: link with the C++ driver so libc++
+    # (static, ANDROID_STL=c++_static) comes along.
+    enable_language(CXX)
+    set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX)
+endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
