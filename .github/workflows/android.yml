@@ -8,7 +8,7 @@ name: android
 
 on:
   push:
-    branches: [android-port, launcher-wip]
+    branches: [android-port]
   workflow_dispatch:
 
 permissions:
@@ -88,19 +88,18 @@ jobs:
           ls "$PREFIX/lib"
 
 
-      - name: glslang (Vulkan renderer; optional)
+      - name: glslang (Vulkan shader compiler)
         if: steps.xbe.outputs.have == 'true'
-        continue-on-error: true
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         shell: bash
         run: |
-          # The NDK Gradle builds the game with (AGP's default): glslang is C++ and must
-          # use the same libc++ (a newer NDK's headers want symbols this one lacks).
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/27.0.12077973"
-          test -d "$ANDROID_NDK_HOME" || export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
-          echo "glslang NDK: $ANDROID_NDK_HOME"
-          set -o pipefail
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-$ANDROID_SDK_ROOT/ndk/27.0.12077973}}"
+          test -d "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" || { echo "no NDK at $ANDROID_NDK_HOME"; ls "$ANDROID_SDK_ROOT/ndk" || true; exit 1; }
           bash android/tools/build_glslang.sh 2>&1 | tee glslang.log | tail -n 40
           ls android/deps/glslang-android/lib
+          # Verify glslang CMake config exists
+          test -f android/deps/glslang-android/lib/cmake/glslang/glslang-config.cmake && echo "glslang CMake config found" || (echo "ERROR: glslang CMake config NOT found"; exit 1)
 
       - name: Build APK
         if: steps.xbe.outputs.have == 'true'
@@ -127,7 +126,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build.log
+          path: |
+            build.log
+            glslang.log
+            ffmpeg.log
+            regen.log
           retention-days: 7
 
       - name: Publish log tails to branch ci-logs

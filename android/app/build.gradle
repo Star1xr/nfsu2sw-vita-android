@@ -12,11 +12,8 @@ def sdlDir       = file("${depsDir}/SDL")
 def glslangDir   = findProperty('nfsu2.glslangDir') ?: "${depsDir}/glslang-android"
 def ffmpegDir    = findProperty('nfsu2.ffmpegDir') ?: "${depsDir}/ffmpeg-vp6-android"
 def adrenoDir    = findProperty('nfsu2.adrenotoolsDir') ?: "${depsDir}/libadrenotools"
-// OpenGL ES 3 is always built. The Vulkan renderer is built in as well, and
-// picked in the launcher, when glslang is there (android/tools/build_glslang.sh)
-// or -Pnfsu2.vulkan=true; -Pnfsu2.vulkan=false leaves it out.
-def vulkanProp   = findProperty('nfsu2.vulkan')
-def useVulkan    = vulkanProp != null ? vulkanProp == 'true' : file("${glslangDir}/lib").exists()
+// Vulkan only on Android (OpenGL ES removed). -Pnfsu2.vulkan=false is ignored.
+def useVulkan    = true
 if (!sdlDir.exists()) {
     throw new GradleException("SDL2 sources missing: run android/tools/fetch_deps.sh")
 }
