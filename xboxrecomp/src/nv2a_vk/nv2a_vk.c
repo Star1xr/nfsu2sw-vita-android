@@ -102,8 +102,8 @@ static int              s_have_bc, s_have_depth_clamp, s_dynamic_rendering;
  * Uses classic VkRenderPass + VkFramebuffer instead of dynamic rendering. */
 
 /* Forward declarations for types defined later. */
-typedef struct VkSurf      VkSurf;
-typedef struct VkDepthBuf  VkDepthBuf;
+struct VkSurf;
+struct VkDepthBuf;
 
 /* Forward declarations for functions defined later. */
 static int renderpass_create(VkSurf *s, VkDepthBuf *d);
