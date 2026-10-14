@@ -2068,8 +2068,14 @@ static void dump_bmp(const char *path, const uint8_t *bgra, uint32_t w, uint32_t
     fclose(f);
 }
 
+#if defined(__ANDROID__)
+extern volatile unsigned nfsu2_frames;         /* android_host.c: FPS overlay */
+#endif
 static void gl_flip(void)
 {
+#if defined(__ANDROID__)
+    nfsu2_frames++;
+#endif
     state_dirty();
     static int dump_every = -1;
     static char dump_prefix[256];

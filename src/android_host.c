@@ -22,12 +22,16 @@
  * SDL's and Android's).
  */
 #ifdef __ANDROID__
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE          /* sched_setaffinity, CPU_SET */
+#endif
 #include <SDL.h>
 #include <android/log.h>
 #include <jni.h>
 
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -121,6 +125,72 @@ static void load_env_file(const char *name)
     fclose(f);
 }
 
+/* ── Big cores ───────────────────────────────────────────────────── */
+
+/* The game is one hot thread (lifted code, the executor, the renderer) plus a
+ * few helpers. Android's scheduler may leave them on the little cores of a
+ * big.LITTLE SoC (Snapdragon 8xx, Dimensity, Exynos, Tensor). Threads inherit
+ * their creator's mask, so restricting the boot thread keeps every later
+ * thread off the efficiency cores. Cores are ranked by cpuinfo_max_freq: the
+ * non-slowest ones are used, at least four (the top four otherwise).
+ * RECOMP_PIN=0 turns it off. A symmetric SoC, or unreadable sysfs, is left
+ * alone. */
+static void pin_to_big_cores(void)
+{
+    long freq[32];
+    long lo = 0, hi = 0;
+    int n, i, count = 0;
+    cpu_set_t set;
+    const char *e = getenv("RECOMP_PIN");
+
+    if (e && *e == '0')
+        return;
+    n = (int)sysconf(_SC_NPROCESSORS_CONF);
+    if (n < 4 || n > 32)
+        return;
+    for (i = 0; i < n; i++) {
+        char path[96];
+        FILE *f;
+        freq[i] = 0;
+        snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+        if ((f = fopen(path, "r"))) {
+            if (fscanf(f, "%ld", &freq[i]) != 1)
+                freq[i] = 0;
+            fclose(f);
+        }
+        if (freq[i] <= 0)
+            return;                          /* cannot rank them: do nothing */
+        if (!lo || freq[i] < lo) lo = freq[i];
+        if (freq[i] > hi) hi = freq[i];
+    }
+    if (lo == hi)
+        return;
+    CPU_ZERO(&set);
+    for (i = 0; i < n; i++)
+        if (freq[i] > lo) {
+            CPU_SET(i, &set);
+            count++;
+        }
+    while (count < 4) {                      /* too few: add the next fastest */
+        int best = -1;
+        for (i = 0; i < n; i++)
+            if (!CPU_ISSET(i, &set) && (best < 0 || freq[i] > freq[best]))
+                best = i;
+        if (best < 0)
+            break;
+        CPU_SET(best, &set);
+        count++;
+    }
+    if (sched_setaffinity(0, sizeof set, &set) == 0) {
+        unsigned mask = 0;
+        for (i = 0; i < n && i < 32; i++)
+            if (CPU_ISSET(i, &set))
+                mask |= 1u << i;
+        fprintf(stderr, "[android] threads kept on the faster %d of %d cores (mask 0x%x)\n",
+                count, n, mask);
+    }
+}
+
 /* launcher_env.txt is written by the launcher's settings screen; the person's
  * own nfsu2x_env.txt is read after it and wins. */
 static void load_env(void)
@@ -146,6 +216,7 @@ void android_boot(void)
     log_init();
     printf("[android] files dir %s\n", s_base);
     load_env();
+    pin_to_big_cores();
 
     /* Landscape only; the accelerometer is not a pad. */
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
@@ -180,6 +251,16 @@ Java_com_nfsu2x_NFSU2Activity_nativeTouchPad(JNIEnv *env, jclass cls, jint mask,
     atomic_store(&s_touch_ly, (unsigned)(uint16_t)(int16_t)ly);
     atomic_store(&s_touch_rx, (unsigned)(uint16_t)(int16_t)rx);
     atomic_store(&s_touch_ry, (unsigned)(uint16_t)(int16_t)ry);
+}
+
+/* Frames presented so far; the FPS overlay (Java) samples it twice a second. */
+volatile unsigned nfsu2_frames;
+
+JNIEXPORT jint JNICALL
+Java_com_nfsu2x_NFSU2Activity_nativeFrames(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return (jint)nfsu2_frames;
 }
 
 /* The overlay is shown unless a physical pad is attached (Java side). */

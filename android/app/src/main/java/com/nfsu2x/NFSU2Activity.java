@@ -2,7 +2,15 @@ package com.nfsu2x;
 
 import android.content.Context;
 import android.hardware.input.InputManager;
+import android.graphics.Color;
+import android.graphics.Typeface;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.view.Gravity;
+import android.widget.TextView;
+import java.util.Locale;
 import android.view.InputDevice;
 import android.view.View;
 import android.view.ViewGroup;
@@ -22,6 +30,26 @@ public class NFSU2Activity extends SDLActivity implements InputManager.InputDevi
     private static native void nativeTouchPad(int mask, int lt, int rt,
                                               int lx, int ly, int rx, int ry);
     private static native void nativeTouchEnabled(boolean on);
+    private static native int nativeFrames();
+
+    private TextView fpsView;
+    private final Handler fpsHandler = new Handler(Looper.getMainLooper());
+    private int fpsLast;
+    private long fpsLastMs;
+    private final Runnable fpsTick = new Runnable() {
+        @Override public void run() {
+            long now = SystemClock.elapsedRealtime();
+            int f = nativeFrames();
+            if (fpsLastMs != 0 && now > fpsLastMs) {
+                float fps = (f - fpsLast) * 1000f / (now - fpsLastMs);
+                fpsView.setText(String.format(Locale.US, "%.0f FPS  %.1f ms", fps,
+                        fps > 0 ? 1000f / fps : 0f));
+            }
+            fpsLast = f;
+            fpsLastMs = now;
+            fpsHandler.postDelayed(this, 500);
+        }
+    };
 
     private TouchControlsView controls;
     private InputManager inputManager;
@@ -42,6 +70,20 @@ public class NFSU2Activity extends SDLActivity implements InputManager.InputDevi
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
 
+        if (Settings.showFps(this) && content instanceof ViewGroup) {
+            fpsView = new TextView(this);
+            fpsView.setTextColor(Color.WHITE);
+            fpsView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+            fpsView.setTextSize(13);
+            fpsView.setBackgroundColor(0x88000000);
+            fpsView.setPadding(16, 6, 16, 6);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP | Gravity.END);
+            ((ViewGroup) content).addView(fpsView, lp);
+            fpsHandler.postDelayed(fpsTick, 500);
+        }
+
         inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
         inputManager.registerInputDeviceListener(this, null);
         refreshOverlay();
@@ -49,6 +91,7 @@ public class NFSU2Activity extends SDLActivity implements InputManager.InputDevi
 
     @Override
     protected void onDestroy() {
+        fpsHandler.removeCallbacksAndMessages(null);
         if (inputManager != null)
             inputManager.unregisterInputDeviceListener(this);
         super.onDestroy();

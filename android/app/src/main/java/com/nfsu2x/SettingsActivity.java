@@ -75,6 +75,19 @@ public class SettingsActivity extends Activity {
         });
         col.addView(stretch);
 
+        // ---- FPS counter ----
+        col.addView(label(getString(R.string.showfps_title), 17, FG, true));
+        CheckBox showFps = new CheckBox(this);
+        showFps.setText(R.string.showfps_note);
+        showFps.setTextColor(0xFFDDDDDD);
+        showFps.setChecked(Settings.showFps(this));
+        showFps.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(CompoundButton v, boolean on) {
+                Settings.setShowFps(SettingsActivity.this, on);
+            }
+        });
+        col.addView(showFps);
+
         // ---- resolution ----
         col.addView(label(getString(R.string.res_title), 17, FG, true));
         col.addView(label(getString(R.string.res_note), 13, DIM, false));

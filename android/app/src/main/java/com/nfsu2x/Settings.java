@@ -29,6 +29,15 @@ public final class Settings {
         return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    /** FPS counter overlay; off by default. Read by NFSU2Activity. */
+    public static boolean showFps(Context c) {
+        return prefs(c).getBoolean("show_fps", false);
+    }
+
+    public static void setShowFps(Context c, boolean on) {
+        prefs(c).edit().putBoolean("show_fps", on).apply();
+    }
+
     public static int fps(Context c) {
         int v = prefs(c).getInt("fps", 30);
         return v == 60 || v == 120 ? v : 30;

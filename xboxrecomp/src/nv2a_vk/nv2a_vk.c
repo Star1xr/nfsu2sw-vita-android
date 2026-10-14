@@ -343,14 +343,42 @@ static int         s_in_render;
 static VkSurf     *s_rt;
 static VkDepthBuf *s_rt_depth;
 
+static uint32_t s_st_barriers, s_st_passes;
+
+/* Between passes and around copies. Tile GPUs (Adreno, Mali) resolve what a
+ * barrier names, so name only what this renderer does: attachment, transfer
+ * and fragment-shader writes, read by attachments, sampling, vertex fetch and
+ * transfers. RECOMP_VK_FULL_BARRIER=1 goes back to ALL_COMMANDS for A/B. */
 static void barrier_all(void)
 {
+    static int full = -1;
     VkMemoryBarrier mb = { VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+    VkPipelineStageFlags src, dst;
     int i;
-    mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    vkCmdPipelineBarrier(s_cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
+    if (full < 0) {
+        const char *e = getenv("RECOMP_VK_FULL_BARRIER");
+        full = e && *e == '1';
+    }
+    if (full) {
+        mb.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        src = dst = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    } else {
+        mb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
+                           VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        src = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dst = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
+    s_st_barriers++;
+    vkCmdPipelineBarrier(s_cb, src, dst, 0, 1, &mb, 0, NULL, 0, NULL);
     for (i = 0; i < VK_MAX_SURF; i++)
         s_surf[i].dirty = 0;
 }
@@ -445,6 +473,7 @@ static void begin_rendering(VkSurf *s, VkDepthBuf *d)
         rpbi.renderArea.extent = fe->ext;
         p_cmd_begin_renderpass(s_cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
     }
+    s_st_passes++;
     s_in_render = 1;
     s_rt = s;
     s_rt_depth = d;
@@ -1727,6 +1756,9 @@ typedef struct {
     uint32_t vin[NV2A_RAW_ATTRS];                  /* format << 16 | stride */
 } PipeKey;
 
+_Static_assert(offsetof(PipeKey, sop) - offsetof(PipeKey, ptopo) == 10 * sizeof(uint32_t),
+               "PipeKey ptopo..sop must be 11 contiguous words (PipeRec.st)");
+
 typedef struct {
     PipeKey key;
     VkPipeline pipe;
@@ -1793,12 +1825,15 @@ static VkBlendOp blend_op(uint32_t v)
 
 /* vkpipes.bin: the program by what generated it, and the pipeline's own
  * state. */
-#define PIPE_REC_MAGIC 0x4C504B56u              /* "VKPL" */
+#define PIPE_REC_MAGIC 0x4C504B57u              /* "VKPW": v2, carries the static state */
 typedef struct {
     uint32_t   magic, pad;
     uint64_t   vkey;
     Nv2aPshKey pk;
     uint32_t   blend, bsrc, bdst, beq, cmask, depth, topo;
+    uint32_t   legacy;                          /* 1: written by the classic render pass path */
+    uint32_t   st[11];                          /* PipeKey ptopo .. sop */
+    uint32_t   vin[NV2A_RAW_ATTRS];
 } PipeRec;
 static uint32_t s_pipes_unsaved;
 
@@ -1807,7 +1842,7 @@ static void pipe_rec_append(const PipeKey *k)
     char path[256];
     PipeRec rec;
     FILE *f;
-    if (s_prewarming || !s_dynamic_rendering || !cache_path(path, sizeof path, "vkpipes.bin"))
+    if (s_prewarming || !cache_path(path, sizeof path, "vkpipes.bin"))
         return;
     memset(&rec, 0, sizeof rec);
     rec.magic = PIPE_REC_MAGIC;
@@ -1815,6 +1850,11 @@ static void pipe_rec_append(const PipeKey *k)
     rec.pk = s_prog[k->prog].pkey;
     rec.blend = k->blend; rec.bsrc = k->bsrc; rec.bdst = k->bdst; rec.beq = k->beq;
     rec.cmask = k->cmask; rec.depth = k->depth; rec.topo = k->topo;
+    if (!s_dynamic_rendering) {
+        rec.legacy = 1;
+        memcpy(rec.st, &k->ptopo, sizeof rec.st);
+        memcpy(rec.vin, k->vin, sizeof rec.vin);
+    }
     if ((f = fopen(path, "ab"))) {
         fwrite(&rec, sizeof rec, 1, f);
         fclose(f);
@@ -2037,17 +2077,23 @@ static void prewarm(void)
         }
         fclose(f);
     }
-    if (s_dynamic_rendering && cache_path(path, sizeof path, "vkpipes.bin") && (f = fopen(path, "rb"))) {
+    if (cache_path(path, sizeof path, "vkpipes.bin") && (f = fopen(path, "rb"))) {
         while (fread(&pr, sizeof pr, 1, f) == 1) {
             VkProg *p;
             PipeKey k;
             if (pr.magic != PIPE_REC_MAGIC) { bad++; break; }
             if (!(p = prog_find(pr.vkey, &pr.pk)))
                 continue;
+            if (pr.legacy != (s_dynamic_rendering ? 0u : 1u))
+                continue;                       /* recorded on the other path */
             memset(&k, 0, sizeof k);
             k.prog = (int)(p - s_prog);
             k.blend = pr.blend; k.bsrc = pr.bsrc; k.bdst = pr.bdst; k.beq = pr.beq;
             k.cmask = pr.cmask; k.depth = pr.depth; k.topo = pr.topo;
+            if (pr.legacy) {
+                memcpy(&k.ptopo, pr.st, sizeof pr.st);
+                memcpy(k.vin, pr.vin, sizeof k.vin);
+            }
             if (pipe_get(&k))
                 npipe++;
         }
@@ -3642,8 +3688,14 @@ static void dump_surface(VkSurf *s, const char *path)
     vkFreeMemory(s_dev, mem, NULL);
 }
 
+#if defined(__ANDROID__)
+extern volatile unsigned nfsu2_frames;         /* android_host.c: FPS overlay */
+#endif
 static void vk_flip(void)
 {
+#if defined(__ANDROID__)
+    nfsu2_frames++;
+#endif
     static int dump_every = -1;
     static char dump_prefix[256];
     VkSurf *s = s_last;
@@ -3666,10 +3718,12 @@ static void vk_flip(void)
             st = e && *e == '1';
         }
         if (st && s_frame - st_frame >= 300) {
-            fprintf(stderr, "[vk] per frame: %u draws -> %u draw calls (%u instances appended)\n",
+            fprintf(stderr, "[vk] per frame: %u draws -> %u draw calls (%u instances appended), "
+                    "%u render passes, %u barriers, %u pipelines\n",
                     s_st_draws / (s_frame - st_frame), s_st_calls / (s_frame - st_frame),
-                    s_st_inst / (s_frame - st_frame));
-            s_st_draws = s_st_calls = s_st_inst = 0;
+                    s_st_inst / (s_frame - st_frame), s_st_passes / (s_frame - st_frame),
+                    s_st_barriers / (s_frame - st_frame), (unsigned)s_npipes);
+            s_st_draws = s_st_calls = s_st_inst = s_st_passes = s_st_barriers = 0;
             st_frame = s_frame;
         }
     }

@@ -19,6 +19,8 @@
     <string name="fps_30">30 fps (Xbox\'taki gibi)</string>
     <string name="fps_60">60 fps (deneysel)</string>
     <string name="fps_120">120 fps (deneysel)</string>
+    <string name="showfps_title">FPS sayacı</string>
+    <string name="showfps_note">Oynarken köşede saniyedeki kare sayısını göster</string>
     <string name="stretch_title">Ekran</string>
     <string name="stretch_note">Görüntüyü tüm ekranı dolduracak şekilde uzat</string>
     <string name="res_title">Çözünürlük</string>

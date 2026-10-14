@@ -19,6 +19,8 @@
     <string name="fps_30">30 fps (as on the Xbox)</string>
     <string name="fps_60">60 fps (experimental)</string>
     <string name="fps_120">120 fps (experimental)</string>
+    <string name="showfps_title">FPS counter</string>
+    <string name="showfps_note">Show frames per second in the corner while playing</string>
     <string name="stretch_title">Screen</string>
     <string name="stretch_note">Stretch the picture to fill the whole screen</string>
     <string name="res_title">Resolution</string>
